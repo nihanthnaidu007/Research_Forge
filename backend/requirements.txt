@@ -1,0 +1,33 @@
+# ResearchForge — Python Dependencies
+
+# LangGraph & LangChain
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langchain-core>=0.3.0
+
+# LLM Providers
+openai>=1.50.0
+
+# Research Tools
+tavily-python>=0.3.0
+
+# Document Processing
+pdfplumber>=0.11.0
+beautifulsoup4>=4.12.0
+httpx>=0.28.0
+
+# API Server
+fastapi>=0.115.0
+uvicorn>=0.32.0
+python-multipart>=0.0.9
+
+# Data & Validation
+pydantic>=2.9.0
+python-dotenv>=1.0.0
+
+# Tracing & Evaluation
+langsmith>=0.1.0
+
+# Export
+reportlab>=4.0.0

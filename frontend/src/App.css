@@ -1,0 +1,45 @@
+/* ResearchForge - Custom App Styles */
+
+/* Hide default scrollbar on html/body for cleaner look */
+html {
+  overflow: hidden;
+}
+
+/* Ensure full height */
+html, body, #root {
+  height: 100%;
+}
+
+/* App container */
+.App {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Custom prose styling for report content */
+.prose-invert {
+  --tw-prose-body: #d4d4d8;
+  --tw-prose-headings: #f4f4f5;
+  --tw-prose-links: #06b6d4;
+  --tw-prose-bold: #f4f4f5;
+}
+
+/* Citation links in content */
+.prose a[href] {
+  color: #06b6d4;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.prose a[href]:hover {
+  color: #22d3ee;
+  text-decoration: underline;
+}
+
+/* Inline citation numbers */
+.citation-ref {
+  color: #06b6d4;
+  font-size: 0.75em;
+  vertical-align: super;
+  font-family: 'JetBrains Mono', monospace;
+}
