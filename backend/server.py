@@ -15,6 +15,7 @@ import json
 import asyncio
 import uuid
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -53,14 +54,73 @@ from db import setup_db, create_session, get_session, update_session, cleanup_ol
 
 limiter = Limiter(key_func=get_remote_address)
 
+import uuid as _uuid
+
+
+class RequestIDMiddleware:
+    """Injects a unique request ID into each request and response."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            request_id = str(_uuid.uuid4())[:8]
+            scope["state"] = scope.get("state", {})
+            scope["state"]["request_id"] = request_id
+
+            async def send_with_id(message):
+                if message["type"] == "http.response.start":
+                    headers = dict(message.get("headers", []))
+                    headers[b"x-request-id"] = request_id.encode()
+                    message["headers"] = list(headers.items())
+                await send(message)
+
+            await self.app(scope, receive, send_with_id)
+        else:
+            await self.app(scope, receive, send)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown logic."""
+    # --- Startup ---
+    validate_env_vars()
+    await asyncio.to_thread(setup_db)
+    await asyncio.to_thread(get_checkpointer)
+    setup_tracing()
+
+    async def run_cleanup_loop():
+        try:
+            while True:
+                await asyncio.sleep(1800)
+                await asyncio.to_thread(_cleanup_sessions_and_files)
+        except asyncio.CancelledError:
+            logger.info("Session cleanup task cancelled — shutting down")
+
+    cleanup_task = asyncio.create_task(run_cleanup_loop())
+    logger.info("ResearchForge API started — session cleanup scheduled every 30 minutes")
+
+    yield
+
+    # --- Shutdown ---
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("ResearchForge API shut down cleanly")
+
+
 # Create the main app
 app = FastAPI(
     title="ResearchForge API",
     description="Multi-Agent Research Report Generation System",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(RequestIDMiddleware)
 
 # Create router with /api prefix
 api_router = APIRouter(prefix="/api")
@@ -68,7 +128,7 @@ api_router = APIRouter(prefix="/api")
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(process)d - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -119,13 +179,50 @@ async def root():
     return {"message": "ResearchForge API", "version": "1.0.0"}
 
 
+def _check_db() -> None:
+    """Execute a trivial query to verify database connectivity."""
+    from db import get_pool
+    with get_pool().connection() as conn:
+        conn.execute("SELECT 1")
+
+
 @api_router.get("/health")
 async def health_check():
-    return {
+    """
+    Health check endpoint. Verifies database connectivity and
+    required environment variables. Used by orchestration to detect
+    broken instances.
+    """
+    health = {
         "status": "ok",
-        "agents": ["research", "document", "factcheck", "outline", "synthesis", "citations"],
-        "model": "gpt-4o"
+        "agents": ["research", "document", "factcheck",
+                   "outline", "synthesis", "citations"],
+        "model": "gpt-4o",
+        "checks": {}
     }
+
+    # Check required env vars
+    required = ["OPENAI_API_KEY", "TAVILY_API_KEY",
+                "DATABASE_URL", "CORS_ORIGINS"]
+    missing = [v for v in required if not os.getenv(v, "").strip()]
+    health["checks"]["env_vars"] = (
+        "ok" if not missing else f"missing: {', '.join(missing)}"
+    )
+
+    # Check database connectivity
+    try:
+        await asyncio.to_thread(_check_db)
+        health["checks"]["database"] = "ok"
+    except Exception as e:
+        health["checks"]["database"] = "error"
+        health["status"] = "degraded"
+        logger.error(f"Health check — database error: {e}")
+
+    if health["status"] != "ok":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=health)
+
+    return health
 
 
 @api_router.post("/run")
@@ -465,37 +562,48 @@ async def stream_session(session_id: str):
 
     async def generate():
         last_update_count = 0
-        while True:
-            session = await asyncio.to_thread(get_session, session_id)
-            if not session:
-                break
-            
-            state = session.get("state", {})
-            updates = state.get("stream_updates", [])
-            
-            # Send new updates
-            if len(updates) > last_update_count:
-                for update in updates[last_update_count:]:
+        heartbeat_counter = 0
+        try:
+            while True:
+                session = await asyncio.to_thread(get_session, session_id)
+                if not session:
+                    break
+
+                state = session.get("state", {})
+                updates = state.get("stream_updates", [])
+
+                if len(updates) > last_update_count:
+                    for update in updates[last_update_count:]:
+                        data = json.dumps({
+                            "type": "update",
+                            "message": update,
+                            "status": session.get("status"),
+                            "current_agent": state.get("current_agent", ""),
+                            "completed_agents": state.get("completed_agents", [])
+                        })
+                        yield f"data: {data}\n\n"
+                    last_update_count = len(updates)
+
+                if session.get("status") in ["waiting_approval", "complete", "error"]:
                     data = json.dumps({
-                        "type": "update",
-                        "message": update,
-                        "status": session.get("status"),
-                        "current_agent": state.get("current_agent", ""),
-                        "completed_agents": state.get("completed_agents", [])
+                        "type": "state",
+                        "session": session
                     })
                     yield f"data: {data}\n\n"
-                last_update_count = len(updates)
-            
-            # Send state snapshot every few updates
-            if session.get("status") in ["waiting_approval", "complete", "error"]:
-                data = json.dumps({
-                    "type": "state",
-                    "session": session
-                })
-                yield f"data: {data}\n\n"
-                break
-            
-            await asyncio.sleep(0.5)
+                    break
+
+                # Send SSE comment as keepalive every 15 seconds (30 × 0.5s iterations)
+                # SSE comments (": ...\n\n") are invisible to EventSource handlers
+                # but prevent proxy idle-timeout disconnects.
+                heartbeat_counter += 1
+                if heartbeat_counter % 30 == 0:
+                    yield ": keepalive\n\n"
+
+                await asyncio.sleep(0.5)
+
+        except asyncio.CancelledError:
+            # Client disconnected — exit cleanly without logging an error
+            logger.debug(f"SSE client disconnected for session {session_id}")
     
     return StreamingResponse(
         generate(),
@@ -726,10 +834,11 @@ async def export_pdf_endpoint(session_id: str):
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"PDF export validation error for session {session_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail="PDF generation failed — invalid report state")
     except Exception as e:
         logger.error(f"PDF export error for session {session_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="PDF generation failed — check server logs for details")
 
 
 # --- Include router and middleware ---
@@ -799,21 +908,4 @@ def _cleanup_sessions_and_files() -> None:
     logger.info(f"Session cleanup complete: removed {len(deleted)} expired sessions")
 
 
-@app.on_event("startup")
-async def start_cleanup_task():
-    """Schedule periodic session cleanup and verify tracing"""
-    validate_env_vars()
-    await asyncio.to_thread(setup_db)
-    await asyncio.to_thread(get_checkpointer)
-    setup_tracing()
-
-    async def run_cleanup_loop():
-        while True:
-            await asyncio.sleep(1800)
-            await asyncio.to_thread(_cleanup_sessions_and_files)
-
-    cleanup_task = asyncio.create_task(run_cleanup_loop())
-    # Store reference to prevent garbage collection
-    app.state.cleanup_task = cleanup_task
-    logger.info("ResearchForge API started \u2014 session cleanup scheduled every 30 minutes")
 
