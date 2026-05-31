@@ -28,22 +28,24 @@ Rules:
 - Do not use em dashes in any section title or description
 - Section titles must be specific and descriptive - maximum 8 words
 - Section descriptions must be 1-2 sentences explaining exactly what to cover
-- Return ONLY raw JSON array, no markdown, no backticks, no explanation:
+- Return ONLY a JSON object with a single key "sections" containing the array, no markdown, no backticks, no explanation:
 
-[
-  {
-    "section_id": "sec_1",
-    "title": "Section Title Here",
-    "description": "2-3 sentences describing what this section should cover",
-    "order": 1
-  },
-  {
-    "section_id": "sec_2",
-    "title": "Another Section Title",
-    "description": "2-3 sentences describing what this section should cover",
-    "order": 2
-  }
-]"""
+{
+  "sections": [
+    {
+      "section_id": "sec_1",
+      "title": "Section Title Here",
+      "description": "2-3 sentences describing what this section should cover",
+      "order": 1
+    },
+    {
+      "section_id": "sec_2",
+      "title": "Another Section Title",
+      "description": "2-3 sentences describing what this section should cover",
+      "order": 2
+    }
+  ]
+}"""
 
 
 @traceable(name="generate-outline", run_type="llm")
@@ -87,6 +89,7 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
                 model=MODEL,
                 temperature=0.4,
                 max_completion_tokens=1000,
+                response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": OUTLINE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
@@ -94,20 +97,16 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
             ),
             label="outline generate_outline",
         )
-        
+
         content = response.choices[0].message.content.strip()
-        
-        # Clean up potential markdown
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            content = content.strip()
-        
-        outline = json.loads(content)
-        
+        data = json.loads(content)
+        raw_outline = data.get("sections", [])
+        if not isinstance(raw_outline, list):
+            raw_outline = []
+
         # Validate and ensure structure
         validated_outline = []
-        for i, section in enumerate(outline[:num_sections]):
+        for i, section in enumerate(raw_outline[:num_sections]):
             validated_outline.append({
                 "section_id": section.get("section_id", f"sec_{i+1}"),
                 "title": section.get("title", f"Section {i+1}"),

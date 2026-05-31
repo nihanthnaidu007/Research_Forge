@@ -7,6 +7,7 @@ import json
 import logging
 from typing import TypedDict, List
 from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -56,21 +57,21 @@ Respond ONLY with JSON, no markdown, no backticks:
 }}"""
 
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.1,
-            max_tokens=300,
-            messages=[
-                {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
-                {"role": "user", "content": prompt}
-            ]
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.1,
+                max_completion_tokens=300,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
+                    {"role": "user", "content": prompt}
+                ]
+            ),
+            label="factcheck_parallel judge_single_claim",
         )
 
         content = response.choices[0].message.content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
         result = json.loads(content)
 
         return {

@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -37,39 +38,40 @@ def extract_claims_from_research(research_results: List[dict]) -> List[str]:
     )[:4000]
     
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.2,
-            max_completion_tokens=800,
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a claim extraction specialist. Extract 5-8 key factual claims from the provided source snippets that can be verified. 
-                    
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.2,
+                max_completion_tokens=800,
+                response_format={"type": "json_object"},
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a claim extraction specialist. Extract 5-8 key factual claims from the provided source snippets that can be verified.
+
 Focus on:
 - Statistical claims and numbers
 - Statements about trends or changes
 - Claims about relationships between factors
 - Factual assertions that could be true or false
 
-Return ONLY a JSON array of claim strings, no markdown, no explanation:
-["claim 1", "claim 2", "claim 3", ...]"""
-                },
-                {
-                    "role": "user",
-                    "content": f"Extract key factual claims from these sources:\n\n{combined_snippets}"
-                }
-            ]
+Return ONLY a JSON object with a single key "claims" containing an array of claim strings, no markdown, no explanation:
+{"claims": ["claim 1", "claim 2", ...]}"""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Extract key factual claims from these sources:\n\n{combined_snippets}"
+                    }
+                ]
+            ),
+            label="factcheck extract_claims",
         )
-        
+
         content = response.choices[0].message.content.strip()
-        # Clean up potential markdown
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        
-        claims = json.loads(content)
+        data = json.loads(content)
+        claims = data.get("claims", [])
+        if not isinstance(claims, list):
+            claims = []
         return claims[:8]  # Limit to 8 claims
         
     except Exception as e:
@@ -111,22 +113,21 @@ Respond ONLY with JSON, no markdown, no backticks:
 }}"""
 
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.1,
-            max_completion_tokens=300,
-            messages=[
-                {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
-                {"role": "user", "content": prompt}
-            ]
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.1,
+                max_completion_tokens=300,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
+                    {"role": "user", "content": prompt}
+                ]
+            ),
+            label="factcheck judge_single_claim",
         )
-        
+
         content = response.choices[0].message.content.strip()
-        # Clean up potential markdown
-        if content.startswith("```"):
-            lines = content.split("\n")
-            content = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
-        
         result = json.loads(content)
         
         return {
