@@ -303,9 +303,14 @@ def build_toc(sections: List[dict], styles) -> List:
 
     for i, section in enumerate(sections):
         title = section.get("title", f"Section {i + 1}")
+        # Page numbers in the TOC are estimates. ReportLab does not provide
+        # page count during the first pass. The cover page is 1, TOC is 2,
+        # content sections start at approximately page 3.
+        # For deep reports the TOC may span page 2-3, shifting numbers by 1.
+        estimated_page = i + 3
         toc_data = [[
             Paragraph(f"{i + 1}. {title}", styles["TOCItem"]),
-            Paragraph(str(i + 3), styles["TOCItem"]),
+            Paragraph(str(estimated_page), styles["TOCItem"]),
         ]]
         toc_row = Table(toc_data, colWidths=[5.5 * inch, 0.5 * inch])
         toc_row.setStyle(TableStyle([

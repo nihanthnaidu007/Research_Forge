@@ -123,7 +123,11 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
         sections = ["Background & Context", "Current State Analysis", "Key Findings"]
         if depth == "deep":
             sections.extend(["Comparative Analysis", "Implications", "Conclusions"])
-        
+
+        logger.warning(
+            f"Outline generation failed — using generic fallback outline. "
+            f"Error: {str(e)[:200]}"
+        )
         return [
             {
                 "section_id": f"sec_{i+1}",
@@ -154,7 +158,20 @@ def outline_node(state: ReportState) -> ReportState:
         outline = generate_outline(
             topic, depth, fact_check_results, research_results, document_summary
         )
-        
+
+        # Check if the returned outline looks like the generic fallback.
+        # Fallback sections always start with "Background & Context".
+        is_fallback = (
+            len(outline) > 0 and
+            outline[0].get("title") == "Background & Context"
+        )
+        if is_fallback:
+            state["stream_updates"].append(
+                f"[{timestamp}] ⚠️ Outline Agent → Warning: LLM outline "
+                f"generation failed. Using generic fallback structure. "
+                f"Report quality may be reduced."
+            )
+
         state["outline"] = outline
         state["original_outline"] = outline.copy()  # Snapshot for versioning
         state["outline_approved"] = False  # Always reset - do not rely on initial state default

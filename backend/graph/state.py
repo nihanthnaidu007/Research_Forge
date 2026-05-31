@@ -93,7 +93,7 @@ class ReportState(TypedDict):
     
     # Report versioning — tracks which sections changed after outline edit
     original_outline: List[dict]       # snapshot before user edits
-    changed_section_ids: List[str]     # CURSOR_TODO: computed by diff logic
+    changed_section_ids: List[str]
     sections_needing_rewrite: List[str]  # section_ids flagged for re-synthesis
 
     # Synthesis phase

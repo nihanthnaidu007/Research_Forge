@@ -98,8 +98,9 @@ def research_node(state: ReportState) -> ReportState:
     
     try:
         # Define search queries
+        current_year = datetime.now().year
         queries = [
-            f"{topic} latest research and developments 2025 2026",
+            f"{topic} latest research and developments {current_year}",
             f"{topic} expert analysis and insights",
             f"{topic} key findings studies and data"
         ]
@@ -124,13 +125,6 @@ def research_node(state: ReportState) -> ReportState:
         # Sort by relevance score
         all_results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
         
-        if not all_results:
-            error_msg = f"[{timestamp}] Research Agent \u2192 Warning: No results found for topic '{topic}'. Check Tavily API key and internet connection."
-            state["stream_updates"].append(error_msg)
-            state["error"] = "Research returned no results. The report may be incomplete."
-            logger.warning(error_msg)
-            # Continue anyway \u2014 let downstream agents handle empty research gracefully
-
         # Increment retry counter so supervisor can detect repeated failures
         state["retry_count"] = state.get("retry_count", 0) + 1
 

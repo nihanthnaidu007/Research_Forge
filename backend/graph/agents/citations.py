@@ -38,7 +38,7 @@ def build_citation_list(written_sections: List[dict], research_results: List[dic
     for section in written_sections:
         content = section.get("content", "")
         url_pattern = r'\[source:\s*(https?://[^\]]+)\]'
-        matches = re.findall(url_pattern, content)
+        matches = re.findall(url_pattern, content, re.IGNORECASE)
         for url in matches:
             if url and url not in seen_urls_set:
                 seen_urls_set.add(url)
@@ -49,13 +49,15 @@ def build_citation_list(written_sections: List[dict], research_results: List[dic
                 seen_urls_set.add(url)
                 seen_urls_ordered.append(url)
 
-    # Second pass: add any research result URLs not yet captured
-    if not seen_urls_ordered and research_results:
-        for r in research_results[:8]:
-            url = r.get("url", "")
-            if url and url not in seen_urls_set:
-                seen_urls_set.add(url)
-                seen_urls_ordered.append(url)
+    # Only fall back to research URLs if the sections actually have content
+    # that could reference them. Do not add sources that were never cited.
+    # An empty citation list is more honest than a list of unused sources.
+    if not seen_urls_ordered:
+        logger.debug(
+            "No inline citations found in written sections — "
+            "citation list will be empty. Check that synthesis is "
+            "producing [source: url] inline references."
+        )
 
     # Build citation list in first-appearance order
     citations = []
@@ -92,7 +94,8 @@ def replace_inline_citations(written_sections: List[dict], sources: List[dict]) 
             return match.group(0)  # Keep original if not found
         
         url_pattern = r'\[source:\s*(https?://[^\]]+)\]'
-        updated_content = re.sub(url_pattern, replace_citation, content)
+        updated_content = re.sub(url_pattern, replace_citation, content,
+                                 flags=re.IGNORECASE)
         
         updated_section = section.copy()
         updated_section["content"] = updated_content

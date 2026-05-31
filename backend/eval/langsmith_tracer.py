@@ -54,9 +54,9 @@ def is_tracing_enabled() -> bool:
 
 
 def get_trace_url(project: Optional[str] = None) -> str:
-    """Return the correct LangSmith project URL for personal workspace"""
+    """Return the LangSmith project URL. Format: /o/default/projects/p/{name}"""
     project_name = project or os.getenv("LANGCHAIN_PROJECT", "Multi-Agent-Research")
-    return f"https://smith.langchain.com/projects/{project_name}"
+    return f"https://smith.langchain.com/o/default/projects/p/{project_name}"
 
 
 def setup_tracing():

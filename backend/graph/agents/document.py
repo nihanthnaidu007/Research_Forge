@@ -45,7 +45,18 @@ def extract_pdf_chunks(pdf_path: str) -> List[dict]:
         logger.info(f"Extracted {len(chunks)} chunks from {pdf_path}")
     except Exception as e:
         logger.error(f"PDF extraction error for {pdf_path}: {str(e)}")
-    
+        chunks.append({
+            "source_label": os.path.basename(pdf_path),
+            "source_type": "pdf",
+            "chunk_index": 0,
+            "content": (
+                f"[PDF could not be extracted — {str(e)[:200]}. "
+                f"Ensure the file is a text-based PDF, not scanned or "
+                f"password-protected.]"
+            ),
+            "word_count": 0,
+        })
+
     return chunks
 
 

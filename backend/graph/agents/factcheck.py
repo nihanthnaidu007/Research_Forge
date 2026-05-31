@@ -111,7 +111,6 @@ def factcheck_node(state: ReportState) -> ReportState:
         claims = extract_claims_from_research(research_results)
         state["stream_updates"].append(f"[{timestamp}] FactCheck Agent → Found {len(claims)} claims to verify")
         
-        # Check each claim (sequential for now - CURSOR_TODO: parallelize with Send())
         results = []
         for i, claim in enumerate(claims):
             state["stream_updates"].append(f"[{timestamp}] FactCheck Agent → Verifying claim {i+1}/{len(claims)}...")

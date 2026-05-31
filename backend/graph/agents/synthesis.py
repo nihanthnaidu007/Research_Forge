@@ -77,17 +77,38 @@ def compute_section_confidence(section: dict, fact_check_results: List[dict]) ->
     return 0.5  # Neutral if no matches
 
 
+def _score_source_for_section(source: dict, section: dict) -> float:
+    """Score a source's relevance to a section by keyword overlap."""
+    section_text = (
+        section.get("title", "") + " " + section.get("description", "")
+    ).lower()
+    snippet = source.get("snippet", "").lower()
+    title = source.get("title", "").lower()
+    section_words = set(section_text.split())
+    source_words = set((snippet + " " + title).split())
+    overlap = len(section_words & source_words)
+    base_score = source.get("relevance_score", 0.5)
+    return base_score + (overlap * 0.05)
+
+
 @traceable(name="write-section", run_type="llm")
-def write_section(section: dict, research_results: List[dict], 
+def write_section(section: dict, research_results: List[dict],
                   fact_check_results: List[dict], document_summary: str = "",
                   is_last: bool = False) -> dict:
     """
     Write a single report section using LLM, grounded in sources.
     """
-    # Build source context
+    # Score each source against this section's topic and use the top 8.
+    # This ensures sections cite the most relevant sources rather than
+    # always citing the same top-8 global results.
+    scored_sources = sorted(
+        research_results,
+        key=lambda r: _score_source_for_section(r, section),
+        reverse=True
+    )
     source_context = "\n".join(
         f"[{r.get('url', '')}] {r.get('title', 'Unknown')}: {r.get('snippet', '')[:300]}"
-        for r in research_results[:8]
+        for r in scored_sources[:8]
     )
     
     # Add document summary if available
@@ -157,7 +178,6 @@ Instructions: Write 180-250 words. Cite sources inline as [source: url]. {ending
         }
 
 
-# CURSOR_TODO: Add streaming token output so frontend can show words appearing in real time
 @traceable(name="synthesis-agent", run_type="chain")
 def synthesis_node(state: ReportState) -> ReportState:
     """
