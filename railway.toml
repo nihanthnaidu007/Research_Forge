@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
+buildCommand = ""
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Railway injects PORT automatically. The Dockerfile CMD uses ${PORT:-8000}.
+# DATABASE_URL is injected by Railway when you provision a Postgres addon.
+# Set all other env vars in the Railway dashboard under Variables.

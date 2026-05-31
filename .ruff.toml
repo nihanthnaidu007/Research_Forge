@@ -1,0 +1,31 @@
+# Ruff — fast Python linter and formatter
+# Run: ruff check backend/
+# Format: ruff format backend/
+# Docs: https://docs.astral.sh/ruff/
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (undefined names, unused imports)
+    "I",   # isort (import ordering)
+    "B",   # flake8-bugbear (common bugs)
+    "UP",  # pyupgrade (modernize syntax)
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+    "B008",  # do not perform function calls in default arguments
+             # (FastAPI uses this pattern legitimately)
+    "UP007", # use X | Y for union types — keep Optional for clarity
+]
+
+[lint.isort]
+known-first-party = ["graph", "utils", "db", "eval", "export"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[lint.per-file-ignores]
+"backend/graph/agents/*.py" = ["B006"]

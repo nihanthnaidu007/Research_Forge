@@ -1,0 +1,45 @@
+version: '3.8'
+
+# Local development only.
+# Runs Postgres so you can develop without installing it locally.
+# Backend: cd backend && uvicorn server:app --reload --port 8000
+# Frontend: cd frontend && yarn start
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: researchforge-postgres
+    environment:
+      POSTGRES_USER: researchforge
+      POSTGRES_PASSWORD: researchforge
+      POSTGRES_DB: researchforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U researchforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+
+# --- Full stack (optional) ---
+# To run backend + frontend + postgres together in Docker:
+#
+#   backend:
+#     build: ./backend
+#     ports: ["8000:8000"]
+#     env_file: ./backend/.env
+#     environment:
+#       - DATABASE_URL=postgresql://researchforge:researchforge@postgres:5432/researchforge
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+#
+#   frontend:
+#     build: ./frontend
+#     ports: ["3000:80"]
+#     depends_on: [backend]

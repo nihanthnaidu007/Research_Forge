@@ -9,9 +9,16 @@ env/
 
 # Secrets - NEVER commit
 backend/.env
+frontend/.env
 .env
 .env.*
 *.env
+
+# Python lockfile (commit this — it is intentional)
+# requirements.lock is intentionally tracked
+
+# Railway local config
+.railway/
 
 # Node
 frontend/node_modules/
@@ -20,6 +27,7 @@ frontend/dist/
 
 # macOS
 .DS_Store
+**/.DS_Store
 .AppleDouble
 
 # Uploads and generated PDFs
