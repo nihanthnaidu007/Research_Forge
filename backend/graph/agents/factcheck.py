@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from typing import List
-from openai import OpenAI
+from utils.clients import get_openai_client
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -14,7 +14,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"
 
 # Verdict scoring
@@ -38,7 +37,7 @@ def extract_claims_from_research(research_results: List[dict]) -> List[str]:
     )[:4000]
     
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model=MODEL,
             temperature=0.2,
             max_completion_tokens=800,
@@ -112,7 +111,7 @@ Respond ONLY with JSON, no markdown, no backticks:
 }}"""
 
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model=MODEL,
             temperature=0.1,
             max_completion_tokens=300,

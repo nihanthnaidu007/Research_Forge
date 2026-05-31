@@ -6,14 +6,13 @@ import os
 import json
 import logging
 from typing import TypedDict, List
-from openai import OpenAI
+from utils.clients import get_openai_client
 from dotenv import load_dotenv
 from langsmith import traceable
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"
 
 VERDICT_SCORES = {
@@ -57,7 +56,7 @@ Respond ONLY with JSON, no markdown, no backticks:
 }}"""
 
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model=MODEL,
             temperature=0.1,
             max_tokens=300,

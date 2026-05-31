@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from typing import List
-from openai import OpenAI
+from utils.clients import get_openai_client
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -14,7 +14,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"
 
 # Verdict scoring for confidence
@@ -121,7 +120,7 @@ Verified Facts:
 Instructions: Write 180-250 words. Cite sources inline as [source: url]. {ending_instruction}"""
 
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model=MODEL,
             temperature=0.5,
             max_completion_tokens=600,

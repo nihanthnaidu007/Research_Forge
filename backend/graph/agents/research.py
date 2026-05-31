@@ -5,33 +5,12 @@ import os
 import logging
 from datetime import datetime
 from urllib.parse import urlparse
-from tavily import TavilyClient
+from utils.clients import get_tavily_client
 from dotenv import load_dotenv
 from langsmith import traceable
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-def get_tavily_client():
-    """
-    Lazily create the Tavily client.
-    We avoid module-import-time initialization so the backend can still start
-    even when `TAVILY_API_KEY` is missing (e.g. misconfigured environments).
-    """
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        return None
-    try:
-        client = TavilyClient(api_key=api_key)
-        # Ensure requests ignores environment proxies.
-        # This avoids system-wide proxy env vars (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) breaking Tavily calls.
-        try:
-            client.session.trust_env = False
-        except Exception:
-            pass
-        return client
-    except Exception:
-        return None
 
 
 def extract_domain(url: str) -> str:
@@ -57,7 +36,7 @@ def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2, st
 
     for attempt in range(retries + 1):
         try:
-            results = tavily_client.search(
+            results = get_tavily_client().search(
                 query=query,
                 search_depth="advanced",
                 max_results=max_results,

@@ -44,6 +44,7 @@ load_dotenv(ROOT_DIR / '.env')
 from graph.state import create_initial_state
 from graph.graph import get_graph
 from eval.langsmith_tracer import get_langsmith_config, is_tracing_enabled, get_trace_url, setup_tracing
+from utils.clients import validate_env_vars
 
 # Create the main app
 app = FastAPI(
@@ -685,6 +686,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def start_cleanup_task():
     """Schedule periodic session cleanup and verify tracing"""
+    validate_env_vars()
     setup_tracing()
 
     async def run_cleanup_loop():

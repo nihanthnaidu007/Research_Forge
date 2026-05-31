@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import List
 import httpx
 from bs4 import BeautifulSoup
-from openai import OpenAI
+from utils.clients import get_openai_client
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -15,7 +15,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 MODEL = "gpt-4o"
 
 
@@ -115,7 +114,7 @@ def summarize_documents(chunks: List[dict], topic: str) -> str:
     )[:6000]
     
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model=MODEL,
             temperature=0.3,
             max_completion_tokens=400,
