@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
 from utils.validation import validate_url
+from graph.state import ReportState
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -152,7 +153,7 @@ def summarize_documents(chunks: List[dict], topic: str) -> str:
 
 
 @traceable(name="document-agent", run_type="chain")
-def document_node(state: dict) -> dict:
+def document_node(state: ReportState) -> ReportState:
     """
     LangGraph node for DocumentAgent.
     Processes uploaded PDFs and pasted URLs.

@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import List
 from utils.url_utils import extract_domain
+from graph.state import ReportState
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -101,7 +102,7 @@ def replace_inline_citations(written_sections: List[dict], sources: List[dict]) 
 
 
 @traceable(name="citations-agent", run_type="chain")
-def citations_node(state: dict) -> dict:
+def citations_node(state: ReportState) -> ReportState:
     """
     LangGraph node for CitationAgent.
     Builds final citation list and updates inline references.

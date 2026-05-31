@@ -9,6 +9,7 @@ from typing import List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
 from utils.scoring import VERDICT_SCORES
+from graph.state import ReportState
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -158,7 +159,7 @@ Instructions: Write 180-250 words. Cite sources inline as [source: url]. {ending
 
 # CURSOR_TODO: Add streaming token output so frontend can show words appearing in real time
 @traceable(name="synthesis-agent", run_type="chain")
-def synthesis_node(state: dict) -> dict:
+def synthesis_node(state: ReportState) -> ReportState:
     """
     LangGraph node for SynthesisAgent.
     Writes one section at a time, incrementing index on each call.

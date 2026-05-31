@@ -124,9 +124,12 @@ class ReportState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
 
-def create_initial_state(topic: str, depth: str = "quick", 
-                         uploaded_pdfs: List[str] = None,
-                         input_urls: List[str] = None) -> ReportState:
+def create_initial_state(
+    topic: str,
+    depth: str = "quick",
+    uploaded_pdfs: Optional[List[str]] = None,
+    input_urls: Optional[List[str]] = None,
+) -> ReportState:
     """Create an initial state for the graph"""
     uploaded_pdfs = uploaded_pdfs or []
     input_urls = input_urls or []

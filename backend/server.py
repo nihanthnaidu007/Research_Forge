@@ -160,6 +160,10 @@ class ApproveOutlineRequest(BaseModel):
     edits: Optional[str] = None
 
 
+# ReportSession defines the schema for session metadata.
+# Note: sessions are currently persisted as plain dicts in the database
+# via db.py for flexibility. This model serves as the canonical schema
+# reference and is used for response validation where applicable.
 class ReportSession(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
@@ -370,7 +374,7 @@ async def run_graph_async(session_id: str):
         # or "WAIT_FOR_HUMAN" from the supervisor
         if next_agent in ("synthesis", "WAIT_FOR_HUMAN") and not is_complete:
             session["status"] = "waiting_approval"
-            timestamp = datetime.now().strftime("%H:%M:%S")
+            timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
             session["state"]["stream_updates"].append(
                 f"[{timestamp}] ⏸ Graph paused - outline ready for review (interrupt checkpoint saved)"
             )
@@ -679,7 +683,7 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
         )
 
     state = session["state"]
-    timestamp = datetime.now().strftime("%H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
 
     # Update state with approved outline
     approved_outline = [s.model_dump() for s in request.outline]

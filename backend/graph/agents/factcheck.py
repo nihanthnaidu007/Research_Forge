@@ -9,6 +9,7 @@ from typing import List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
 from utils.scoring import VERDICT_SCORES
+from graph.state import ReportState
 from graph.agents.factcheck_parallel import judge_single_claim_parallel
 from dotenv import load_dotenv
 from langsmith import traceable
@@ -95,7 +96,7 @@ def judge_single_claim(claim: str, sources: List[dict]) -> dict:
 # This function is kept only to avoid breaking any external imports.
 # Do not wire this node into the graph — use factcheck_fanout instead.
 @traceable(name="factcheck-agent", run_type="chain")
-def factcheck_node(state: dict) -> dict:
+def factcheck_node(state: ReportState) -> ReportState:
     """
     LangGraph node for FactCheckAgent (SEQUENTIAL FALLBACK).
     Extracts claims and verifies them against sources.

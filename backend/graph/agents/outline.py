@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
+from graph.state import ReportState
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -135,7 +136,7 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
 
 
 @traceable(name="outline-agent", run_type="chain")
-def outline_node(state: dict) -> dict:
+def outline_node(state: ReportState) -> ReportState:
     """
     LangGraph node for OutlineAgent.
     Generates a structured report outline.

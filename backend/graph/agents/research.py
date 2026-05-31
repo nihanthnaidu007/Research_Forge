@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from utils.clients import get_tavily_client
 from utils.url_utils import extract_domain
+from graph.state import ReportState
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -78,7 +79,7 @@ def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2, st
 
 
 @traceable(name="research-agent", run_type="chain")
-def research_node(state: dict) -> dict:
+def research_node(state: ReportState) -> ReportState:
     """
     LangGraph node for WebResearchAgent.
     Performs multiple Tavily searches and aggregates results.
