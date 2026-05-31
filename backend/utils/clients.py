@@ -19,6 +19,10 @@ REQUIRED_ENV_VARS = {
     "OPENAI_API_KEY": "OpenAI API key — required for all LLM calls",
     "TAVILY_API_KEY": "Tavily API key — required for web research",
     "DATABASE_URL": "PostgreSQL connection string — required for session persistence",
+    "CORS_ORIGINS": (
+        "Allowed CORS origins — comma-separated list of frontend URLs, "
+        "or '*' to allow all origins (development only)"
+    ),
 }
 
 

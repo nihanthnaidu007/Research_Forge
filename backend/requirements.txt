@@ -22,6 +22,7 @@ httpx>=0.28.0
 
 # API Server
 fastapi>=0.115.0
+slowapi>=0.1.9
 uvicorn>=0.32.0
 python-multipart>=0.0.9
 

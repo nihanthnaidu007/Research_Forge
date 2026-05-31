@@ -2,10 +2,13 @@
 ResearchForge - Multi-Agent Research Report System
 FastAPI Backend with SSE Streaming
 """
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 import logging
 import json
@@ -48,12 +51,16 @@ from utils.clients import validate_env_vars
 from utils.validation import validate_url
 from db import setup_db, create_session, get_session, update_session, cleanup_old_sessions as db_cleanup_sessions
 
+limiter = Limiter(key_func=get_remote_address)
+
 # Create the main app
 app = FastAPI(
     title="ResearchForge API",
     description="Multi-Agent Research Report Generation System",
     version="1.0.0"
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create router with /api prefix
 api_router = APIRouter(prefix="/api")
@@ -122,11 +129,12 @@ async def health_check():
 
 
 @api_router.post("/run")
-async def run_report(request: RunReportRequest, background_tasks: BackgroundTasks):
+@limiter.limit("10/minute")
+async def run_report(request: Request, run_request: RunReportRequest, background_tasks: BackgroundTasks):
     """Start a new research report generation"""
 
     # Input sanitization
-    topic = request.topic.strip()
+    topic = run_request.topic.strip()
     if len(topic) < 5:
         raise HTTPException(status_code=400, detail="Topic must be at least 5 characters long")
     if len(topic) > 500:
@@ -134,7 +142,7 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
 
     # Validate URLs if provided
     valid_urls = []
-    for url in request.input_urls:
+    for url in run_request.input_urls:
         url = url.strip()
         if not url:
             continue
@@ -151,7 +159,7 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     run_name = f"research-report-{safe_topic}-{session_id[:8]}"
 
     valid_pdfs = []
-    for raw_path in request.uploaded_pdfs:
+    for raw_path in run_request.uploaded_pdfs:
         try:
             pdf_path = Path(raw_path).resolve()
             if (
@@ -168,16 +176,16 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     # Create initial state with sanitized inputs
     initial_state = create_initial_state(
         topic=topic,
-        depth=request.depth,
+        depth=run_request.depth,
         uploaded_pdfs=valid_pdfs,
         input_urls=valid_urls
     )
-    
+
     # Store session
     await asyncio.to_thread(create_session, session_id, {
         "id": session_id,
         "topic": topic,
-        "depth": request.depth,
+        "depth": run_request.depth,
         "status": "running",
         "run_name": run_name,
         "trace_url": get_trace_url() if is_tracing_enabled() else None,
@@ -191,7 +199,7 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     return {
         "session_id": session_id,
         "status": "running",
-        "message": f"Started research report generation for: {request.topic}"
+        "message": f"Started research report generation for: {run_request.topic}"
     }
 
 
@@ -583,7 +591,9 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
 
 
 @api_router.post("/upload-pdf")
+@limiter.limit("30/minute")
 async def upload_pdf(
+    request: Request,
     session_id: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
@@ -725,16 +735,32 @@ async def export_pdf_endpoint(session_id: str):
 # --- Include router and middleware ---
 app.include_router(api_router)
 
-cors_origins_env = os.environ.get('CORS_ORIGINS', '')
-if cors_origins_env:
-    cors_origins = [origin.strip() for origin in cors_origins_env.split(',')]
-else:
+cors_origins_env = os.environ.get('CORS_ORIGINS', '').strip()
+
+# CORS_ORIGINS must be set explicitly. validate_env_vars() at startup
+# enforces this. The fallback here is a safety net only — if somehow
+# reached without the env var, default to a closed posture.
+if not cors_origins_env:
+    cors_origins = []
+    logger.error(
+        "CORS_ORIGINS is not set — all cross-origin requests will be blocked. "
+        "Set CORS_ORIGINS=* for development or a comma-separated list of "
+        "allowed origins for production."
+    )
+elif cors_origins_env == "*":
     cors_origins = ["*"]
+    logger.warning(
+        "CORS_ORIGINS=* — all origins allowed. "
+        "Acceptable for development only."
+    )
+else:
+    cors_origins = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
+    logger.info(f"CORS restricted to {len(cors_origins)} origin(s): {cors_origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True if cors_origins != ["*"] else False,
-    allow_origins=cors_origins,
+    allow_credentials=cors_origins != ["*"] and bool(cors_origins),
+    allow_origins=cors_origins if cors_origins else [],
     allow_methods=["*"],
     allow_headers=["*"],
 )
