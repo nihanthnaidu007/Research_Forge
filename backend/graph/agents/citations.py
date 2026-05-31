@@ -1,6 +1,8 @@
 """
 CitationAgent - Deduplicates and formats all references
 """
+# No LLM calls in this agent — citation building is deterministic.
+# Retry wrapper is not needed here.
 import os
 import re
 import logging

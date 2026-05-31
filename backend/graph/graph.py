@@ -5,6 +5,7 @@ Uses Send() API for parallel fact-checking.
 """
 import logging
 import os
+import threading
 from datetime import datetime
 from typing import Optional
 from langgraph.graph import StateGraph, END
@@ -184,13 +185,25 @@ def build_graph():
 
 # Module-level compiled graph instance (singleton)
 _compiled_graph = None
+_graph_lock = threading.Lock()
 _checkpointer: Optional[PostgresSaver] = None
 
 
 def get_graph():
-    """Get or create the compiled graph with MemorySaver"""
+    """
+    Get or create the compiled graph with PostgresSaver.
+    Double-checked locking ensures only one graph is ever built,
+    even under concurrent first requests.
+    """
     global _compiled_graph
     if _compiled_graph is None:
-        _compiled_graph = build_graph()
-        logger.info("Graph compiled with PostgresSaver + Send() parallel factcheck + interrupt_before=['synthesis']")
+        with _graph_lock:
+            # Re-check inside the lock — another thread may have built
+            # the graph between the outer check and acquiring the lock.
+            if _compiled_graph is None:
+                _compiled_graph = build_graph()
+                logger.info(
+                    "Graph compiled with PostgresSaver + "
+                    "Send() parallel factcheck + interrupt_before=['synthesis']"
+                )
     return _compiled_graph

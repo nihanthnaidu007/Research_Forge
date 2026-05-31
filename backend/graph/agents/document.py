@@ -8,6 +8,7 @@ from typing import List
 import httpx
 from bs4 import BeautifulSoup
 from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 from utils.validation import validate_url
 from dotenv import load_dotenv
 from langsmith import traceable
@@ -119,20 +120,30 @@ def summarize_documents(chunks: List[dict], topic: str) -> str:
     )[:6000]
     
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.3,
-            max_completion_tokens=400,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a research analyst. Summarize the key insights from the provided documents that are relevant to the given topic. Be concise and focus on factual information."
-                },
-                {
-                    "role": "user",
-                    "content": f"Topic: {topic}\n\nDocument excerpts:\n{combined_text}\n\nProvide a 200-word summary of the key insights relevant to the topic:"
-                }
-            ]
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.3,
+                max_completion_tokens=400,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a research analyst. Summarize the key "
+                                   "insights from the provided documents that are "
+                                   "relevant to the given topic. Be concise and "
+                                   "focus on factual information."
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Topic: {topic}\n\nDocument excerpts:\n{combined_text}"
+                            "\n\nProvide a 200-word summary of the key insights "
+                            "relevant to the topic:"
+                        )
+                    }
+                ]
+            ),
+            label="document summarize_documents",
         )
         return response.choices[0].message.content.strip()
     except Exception as e:

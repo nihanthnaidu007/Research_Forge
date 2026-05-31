@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -81,14 +82,17 @@ Fact-check results:
 Generate a {num_sections}-section report outline that covers this topic comprehensively. Return only JSON array."""
 
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.4,
-            max_completion_tokens=1000,
-            messages=[
-                {"role": "system", "content": OUTLINE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ]
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.4,
+                max_completion_tokens=1000,
+                messages=[
+                    {"role": "system", "content": OUTLINE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ]
+            ),
+            label="outline generate_outline",
         )
         
         content = response.choices[0].message.content.strip()

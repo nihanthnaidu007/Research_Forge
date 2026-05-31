@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -120,14 +121,17 @@ Verified Facts:
 Instructions: Write 180-250 words. Cite sources inline as [source: url]. {ending_instruction}"""
 
     try:
-        response = get_openai_client().chat.completions.create(
-            model=MODEL,
-            temperature=0.5,
-            max_completion_tokens=600,
-            messages=[
-                {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ]
+        response = call_with_retry(
+            lambda: get_openai_client().chat.completions.create(
+                model=MODEL,
+                temperature=0.5,
+                max_completion_tokens=600,
+                messages=[
+                    {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ]
+            ),
+            label=f"synthesis write_section [{section.get('section_id', '?')}]",
         )
         
         content = response.choices[0].message.content.strip()

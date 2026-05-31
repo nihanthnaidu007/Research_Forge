@@ -332,7 +332,30 @@ async def run_graph_async(session_id: str):
 
         # Run graph in thread to avoid blocking the async event loop
         # The graph will pause at interrupt_before=['synthesis'] automatically
-        result = await asyncio.to_thread(graph.invoke, state, config)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(graph.invoke, state, config),
+                timeout=GRAPH_EXECUTION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            timeout_msg = (
+                f"Graph execution timed out after "
+                f"{int(GRAPH_EXECUTION_TIMEOUT)}s for session {session_id}"
+            )
+            logger.error(timeout_msg)
+            if session_id:
+                existing = await asyncio.to_thread(get_session, session_id)
+                if existing:
+                    existing["state"]["error"] = (
+                        "Report generation timed out. "
+                        "This can happen when external APIs are slow. "
+                        "Please try again."
+                    )
+                    await asyncio.to_thread(update_session, session_id, {
+                        "status": "error",
+                        "state": existing["state"],
+                    })
+            return
 
         # Update session with result
         session["state"] = result
@@ -446,7 +469,30 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
         approved_outline_len = len(updated_state.get("approved_outline", []))
         max_iterations = max(30, approved_outline_len * 3)
         for iteration in range(max_iterations):
-            result = await asyncio.to_thread(graph.invoke, None, config)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(graph.invoke, None, config),
+                    timeout=GRAPH_RESUME_ITERATION_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                timeout_msg = (
+                    f"Synthesis iteration {iteration + 1} timed out after "
+                    f"{int(GRAPH_RESUME_ITERATION_TIMEOUT)}s for session {session_id}"
+                )
+                logger.error(timeout_msg)
+                if session_id in []:  # always true path
+                    pass
+                existing = await asyncio.to_thread(get_session, session_id)
+                if existing:
+                    existing["state"]["error"] = (
+                        f"Report generation timed out on section "
+                        f"{iteration + 1}. Please try again."
+                    )
+                    await asyncio.to_thread(update_session, session_id, {
+                        "status": "error",
+                        "state": existing["state"],
+                    })
+                return
 
             # Update session state after each section so streaming UI sees progress
             session["state"] = result
@@ -875,6 +921,16 @@ app.add_middleware(
 )
 
 SESSION_TTL_SECONDS = 7200
+
+# Maximum wall-clock time for a full graph execution.
+# Covers deep 6-section reports with retries. If exceeded, the session
+# is marked error so the user gets a clear failure instead of waiting forever.
+GRAPH_EXECUTION_TIMEOUT = 600.0  # 10 minutes
+
+# Maximum time per synthesis iteration in the resume loop.
+# Each iteration writes one section. 5 minutes is generous for a single
+# GPT-4o call but accounts for rate limit retries.
+GRAPH_RESUME_ITERATION_TIMEOUT = 300.0  # 5 minutes per section
 
 
 def _cleanup_sessions_and_files() -> None:

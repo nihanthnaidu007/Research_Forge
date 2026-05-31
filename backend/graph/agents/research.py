@@ -71,6 +71,9 @@ def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2, st
                     stream_updates.append(
                         f"{prefix}\u2717 Tavily search attempt {attempt + 1} failed: {str(e)}"
                     )
+                # time.sleep is correct here \u2014 this function runs inside
+                # asyncio.to_thread(), not on the event loop. Using asyncio.sleep
+                # here would raise RuntimeError (no running event loop in this thread).
                 time.sleep(wait)
             else:
                 logger.error(f"Tavily search failed after {retries + 1} attempts for '{query[:40]}': {str(e)}")
