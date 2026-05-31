@@ -16,7 +16,7 @@ from graph.state import ReportState
 from graph.supervisor import supervisor_node
 from graph.agents.research import research_node
 from graph.agents.document import document_node
-from graph.agents.factcheck import factcheck_node, extract_claims_from_research
+from graph.agents.factcheck import extract_claims_from_research
 from graph.agents.factcheck_parallel import factcheck_single_node
 from graph.agents.outline import outline_node
 from graph.agents.synthesis import synthesis_node
@@ -132,7 +132,6 @@ def build_graph():
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("research", research_node)
     workflow.add_node("document", document_node)
-    workflow.add_node("factcheck", factcheck_node)  # Sequential fallback (not used in main flow)
     workflow.add_node("outline", outline_node)
     workflow.add_node("synthesis", synthesis_node)
     workflow.add_node("citations", citations_node)
@@ -164,7 +163,6 @@ def build_graph():
     # Standard agents route back to supervisor
     workflow.add_edge("research", "supervisor")
     workflow.add_edge("document", "supervisor")
-    workflow.add_edge("factcheck", "supervisor")  # Fallback sequential path
     workflow.add_edge("outline", "supervisor")
     workflow.add_edge("synthesis", "supervisor")
     workflow.add_edge("citations", "supervisor")

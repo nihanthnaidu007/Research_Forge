@@ -17,9 +17,13 @@ logger = logging.getLogger(__name__)
 MODEL = "gpt-4o"
 
 
+# The supervisor uses deterministic rule-based routing, not LLM routing.
+# SupervisorDecision is a structured return type for get_supervisor_decision().
+# The @traceable decorator labels this as "chain" in LangSmith for visibility
+# but no LLM call is made here.
 class SupervisorDecision(BaseModel):
     """Structured output for supervisor routing decisions"""
-    next_agent: Literal["research", "document", "factcheck", "outline", "synthesis", "citations", "END", "WAIT_FOR_HUMAN"]
+    next_agent: Literal["research", "document", "factcheck", "outline", "synthesis", "citations", "END"]
     reasoning: str = Field(description="Brief explanation for routing decision")
 
 
@@ -132,9 +136,7 @@ def supervisor_node(state: dict) -> dict:
         state["next_agent"] = decision.next_agent
         
         # Add to stream updates
-        if decision.next_agent == "WAIT_FOR_HUMAN":
-            update_msg = f"[{timestamp}] ⏸ WAITING FOR HUMAN APPROVAL - Review and approve the outline"
-        elif decision.next_agent == "END":
+        if decision.next_agent == "END":
             update_msg = f"[{timestamp}] ✓ Supervisor → Report generation complete"
             state["is_complete"] = True
         else:

@@ -18,7 +18,7 @@ import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 # Clear any system proxy environment variables that block outbound API calls
@@ -166,7 +166,7 @@ class ReportSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     topic: str
     depth: str
-    status: str = "pending"  # pending, running, waiting_approval, complete, error
+    status: Literal["pending", "running", "waiting_approval", "complete", "error"] = "pending"
     state: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

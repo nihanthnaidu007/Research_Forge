@@ -150,10 +150,11 @@ Respond ONLY with JSON, no markdown, no backticks:
         }
 
 
-# NOTE: This sequential factcheck_node is kept as a fallback.
-# The production path now uses factcheck_fanout → factcheck_single (parallel via Send() API)
-# → factcheck_merge. The supervisor routes to "factcheck_fanout" not "factcheck".
-# This function is no longer called in the main graph flow.
+# DEAD CODE: This sequential factcheck_node is NOT wired into the graph.
+# The production path is: factcheck_fanout → factcheck_single (parallel
+# via Send() API) → factcheck_merge.
+# This function is kept only to avoid breaking any external imports.
+# Do not wire this node into the graph — use factcheck_fanout instead.
 @traceable(name="factcheck-agent", run_type="chain")
 def factcheck_node(state: dict) -> dict:
     """
