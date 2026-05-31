@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 # Temp directory for uploads
 UPLOAD_DIR = Path("/tmp/researchforge_uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 # --- Pydantic Models ---
@@ -590,18 +591,51 @@ async def upload_pdf(
     if session_id is None:
         session_id = str(uuid.uuid4())
 
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    # --- Size check ---
+    # Read the file content once into memory (bounded by MAX_UPLOAD_BYTES + 1).
+    # Reading one extra byte lets us detect oversized files without loading them
+    # fully. UploadFile.read() is async-safe here.
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024*1024)} MB"
+        )
 
-    # Save file to upload directory (works for both pre-run and mid-session uploads)
-    safe_filename = f"{session_id}_{file.filename}".replace("/", "_").replace("..", "")
+    # --- Magic byte check ---
+    # PDF files must begin with the %PDF- signature (hex 25 50 44 46 2D).
+    # Extension-only checks are trivially bypassed by renaming any file.
+    PDF_MAGIC = b"%PDF-"
+    if not content[:5] == PDF_MAGIC:
+        raise HTTPException(
+            status_code=400,
+            detail="File does not appear to be a valid PDF (invalid file signature)"
+        )
+
+    # --- Filename sanitization ---
+    # Strip to the basename only (no directory components), remove null bytes,
+    # remove all characters except alphanumeric, dots, hyphens, underscores,
+    # and truncate to 100 characters to prevent filesystem issues.
+    original_name = Path(file.filename).name  # basename only, drops any path
+    original_name = original_name.replace("\x00", "")  # strip null bytes
+    safe_name = "".join(
+        c for c in original_name if c.isalnum() or c in (".", "-", "_")
+    )
+    if not safe_name or safe_name.startswith("."):
+        safe_name = "upload.pdf"
+    safe_name = safe_name[:100]
+    safe_filename = f"{session_id}_{safe_name}"
     file_path = UPLOAD_DIR / safe_filename
 
+    # --- Write to disk ---
     try:
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save uploaded file"
+        )
 
     # If session exists, update its state
     session = await asyncio.to_thread(get_session, session_id)
