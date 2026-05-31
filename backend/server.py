@@ -609,6 +609,20 @@ async def upload_pdf(
         state["uploaded_pdfs"] = uploaded_pdfs
         state["has_documents"] = True
         await asyncio.to_thread(update_session, session_id, {"state": state})
+    else:
+        # No session exists yet — create a minimal tracking row so cleanup
+        # can find and delete this file when the session expires.
+        await asyncio.to_thread(create_session, session_id, {
+            "id": session_id,
+            "topic": f"upload-only/{file.filename}",
+            "depth": "quick",
+            "status": "pending",
+            "state": {
+                "uploaded_pdfs": [str(file_path)],
+                "has_documents": True,
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     logger.info(f"Uploaded PDF: {file.filename} -> {file_path}")
     return {
