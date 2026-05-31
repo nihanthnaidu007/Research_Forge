@@ -345,7 +345,11 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
         # interrupt_before=["synthesis"] fires for EVERY synthesis call (one per section).
         # We loop invoke(None, config) until the graph reaches END or an error occurs.
         # Each iteration: synthesis writes one section → supervisor routes to next → interrupt fires.
-        max_iterations = 20  # Safety limit to prevent infinite loops
+        # Derive limit from outline length: one iteration per section plus
+        # a fixed buffer for the citations pass and any edge cases.
+        # Minimum of 30 so short outlines still have headroom.
+        approved_outline_len = len(updated_state.get("approved_outline", []))
+        max_iterations = max(30, approved_outline_len * 3)
         for iteration in range(max_iterations):
             result = await asyncio.to_thread(graph.invoke, None, config)
 

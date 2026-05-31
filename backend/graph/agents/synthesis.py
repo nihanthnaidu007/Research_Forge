@@ -246,8 +246,37 @@ def synthesis_node(state: dict) -> dict:
         return state
         
     except Exception as e:
-        error_msg = f"[{timestamp}] Synthesis Agent → Error: {str(e)}"
+        error_msg = (
+            f"[{timestamp}] ✗ Synthesis Agent → Section "
+            f"{current_index + 1}/{len(approved_outline)} failed: {str(e)}"
+        )
         state["stream_updates"].append(error_msg)
-        state["error"] = str(e)
         logger.error(error_msg)
+
+        # Append error placeholder so the supervisor sees progress and
+        # advances past this section instead of retrying it indefinitely.
+        # Do NOT set state["error"] here — that signals terminal failure
+        # to the resume loop and would break the session immediately.
+        error_section = {
+            "section_id": section.get("section_id", f"sec_{current_index + 1}"),
+            "title": section.get("title", f"Section {current_index + 1}"),
+            "content": (
+                f"[This section could not be generated — "
+                f"error: {str(e)[:200]}]"
+            ),
+            "word_count": 0,
+            "sources_used": [],
+        }
+        written_sections = state.get("written_sections", [])
+        written_sections.append(error_section)
+        state["written_sections"] = written_sections
+        state["current_section_index"] = current_index + 1
+
+        if current_index + 1 >= len(approved_outline):
+            state["completed_agents"].append("synthesis")
+            state["stream_updates"].append(
+                f"[{timestamp}] Synthesis Agent → Complete with errors: "
+                f"all {len(approved_outline)} sections processed"
+            )
+
         return state
