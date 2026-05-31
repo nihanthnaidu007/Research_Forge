@@ -7,22 +7,13 @@ import os
 import re
 import logging
 from datetime import datetime
-from urllib.parse import urlparse
 from typing import List
+from utils.url_utils import extract_domain
 from dotenv import load_dotenv
 from langsmith import traceable
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-
-def extract_domain(url: str) -> str:
-    """Extract domain from URL"""
-    try:
-        parsed = urlparse(url)
-        return parsed.netloc.replace("www.", "")
-    except:
-        return "unknown"
 
 
 def build_citation_list(written_sections: List[dict], research_results: List[dict]) -> List[dict]:

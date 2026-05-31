@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
+from utils.scoring import VERDICT_SCORES
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -16,13 +17,6 @@ logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 MODEL = "gpt-4o"
-
-# Verdict scoring for confidence
-VERDICT_SCORES = {
-    "SUPPORTED": 1.0,
-    "PARTIALLY_SUPPORTED": 0.6,
-    "UNSUPPORTED": 0.2
-}
 
 
 SYNTHESIS_SYSTEM_PROMPT = """You are a senior research analyst writing one section of a structured research report. Your output will be published directly - write as if a human expert wrote it.

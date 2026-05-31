@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
+from utils.scoring import VERDICT_SCORES
+from graph.agents.factcheck_parallel import judge_single_claim_parallel
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -16,13 +18,6 @@ logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 MODEL = "gpt-4o"
-
-# Verdict scoring
-VERDICT_SCORES = {
-    "SUPPORTED": 1.0,
-    "PARTIALLY_SUPPORTED": 0.6,
-    "UNSUPPORTED": 0.2
-}
 
 
 @traceable(name="extract-claims", run_type="llm")
@@ -85,69 +80,13 @@ Return ONLY a JSON object with a single key "claims" containing an array of clai
         return fallback_claims[:5]
 
 
-@traceable(name="judge-claim", run_type="llm")
 def judge_single_claim(claim: str, sources: List[dict]) -> dict:
     """
-    LLM judges whether a claim is supported by the retrieved sources.
-    Returns a FactCheckResult dict.
+    Delegates to judge_single_claim_parallel — the canonical implementation.
+    This function is kept for import compatibility only. The dead sequential
+    factcheck_node was the only caller. Do not add new callers here.
     """
-    # Build sources text
-    sources_text = "\n\n".join(
-        f"[{s.get('source_domain', 'unknown')}] ({s.get('url', '')}): {s.get('snippet', '')[:400]}"
-        for s in sources[:8]
-    )
-    
-    prompt = f"""You are a fact-checking AI. Given a claim and source excerpts, assess whether the sources support the claim.
-
-Claim: {claim}
-
-Source excerpts:
-{sources_text}
-
-Respond ONLY with JSON, no markdown, no backticks:
-{{
-    "verdict": "SUPPORTED" or "PARTIALLY_SUPPORTED" or "UNSUPPORTED",
-    "confidence": 0.0 to 1.0,
-    "reasoning": "one sentence explanation",
-    "supporting_urls": ["url1", "url2"]
-}}"""
-
-    try:
-        response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
-                model=MODEL,
-                temperature=0.1,
-                max_completion_tokens=300,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ]
-            ),
-            label="factcheck judge_single_claim",
-        )
-
-        content = response.choices[0].message.content.strip()
-        result = json.loads(content)
-        
-        return {
-            "claim": claim,
-            "verdict": result.get("verdict", "PARTIALLY_SUPPORTED"),
-            "confidence": float(result.get("confidence", 0.5)),
-            "reasoning": result.get("reasoning", "Unable to determine"),
-            "supporting_urls": result.get("supporting_urls", [])
-        }
-        
-    except Exception as e:
-        logger.error(f"Fact-check error for claim '{claim[:50]}': {str(e)}")
-        # Fallback: return low-confidence unsupported result to avoid silently inflating scores
-        return {
-            "claim": claim,
-            "verdict": "UNSUPPORTED",
-            "confidence": 0.2,
-            "reasoning": f"Could not verify — API error: {str(e)[:100]}",
-            "supporting_urls": []
-        }
+    return judge_single_claim_parallel(claim, sources)
 
 
 # DEAD CODE: This sequential factcheck_node is NOT wired into the graph.

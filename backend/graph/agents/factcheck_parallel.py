@@ -9,6 +9,7 @@ import logging
 from typing import TypedDict, List
 from utils.clients import get_openai_client
 from utils.llm_utils import call_with_retry
+from utils.scoring import VERDICT_SCORES
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -16,12 +17,6 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o"
-
-VERDICT_SCORES = {
-    "SUPPORTED": 1.0,
-    "PARTIALLY_SUPPORTED": 0.6,
-    "UNSUPPORTED": 0.2
-}
 
 # Maximum number of concurrent OpenAI calls during parallel fact-checking.
 # Set to 5 to stay within OpenAI tier-1 RPM limits across concurrent sessions.

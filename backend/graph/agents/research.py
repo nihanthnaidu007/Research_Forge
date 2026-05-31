@@ -4,22 +4,13 @@ WebResearchAgent - Performs live web research using Tavily API
 import os
 import logging
 from datetime import datetime
-from urllib.parse import urlparse
 from utils.clients import get_tavily_client
+from utils.url_utils import extract_domain
 from dotenv import load_dotenv
 from langsmith import traceable
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-
-def extract_domain(url: str) -> str:
-    """Extract domain from URL"""
-    try:
-        parsed = urlparse(url)
-        return parsed.netloc.replace("www.", "")
-    except:
-        return "unknown"
 
 
 @traceable(name="tavily-web-search", run_type="tool")
