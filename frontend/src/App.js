@@ -31,6 +31,8 @@ function App() {
     error,
     traceUrl,
     versioning_report,
+    outlineEdits,
+    setOutlineEdits,
     // Actions
     startReport,
     resetReport,
@@ -96,6 +98,8 @@ function App() {
           error={error}
           onReset={resetReport}
           versioningReport={versioning_report}
+          outlineEdits={outlineEdits}
+          onEditsChange={setOutlineEdits}
         />
       </motion.main>
       

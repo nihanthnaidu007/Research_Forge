@@ -200,7 +200,9 @@ export function MainPanel({
   overallConfidence,
   error,
   onReset,
-  versioningReport
+  versioningReport,
+  outlineEdits,
+  onEditsChange
 }) {
   const renderContent = () => {
     // Error state — check first so errors always show
@@ -221,6 +223,8 @@ export function MainPanel({
           onUpdateSection={onUpdateSection}
           onApprove={onApprove}
           isLoading={isLoading}
+          outlineEdits={outlineEdits}
+          onEditsChange={onEditsChange}
         />
       );
     }

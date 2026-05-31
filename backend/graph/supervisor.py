@@ -42,9 +42,16 @@ def get_supervisor_decision(state: dict) -> SupervisorDecision:
     # Routing rules
     # 1. If research_results is empty → route to "research"
     if not research_results:
+        retry_count = state.get("retry_count", 0)
+        if retry_count >= 2:
+            # Research failed after 2 attempts — surface error instead of looping forever
+            return SupervisorDecision(
+                next_agent="END",
+                reasoning=f"Research failed after {retry_count} attempts. Check Tavily API key and network connectivity."
+            )
         return SupervisorDecision(
             next_agent="research",
-            reasoning="No research results yet. Starting web research phase."
+            reasoning=f"No research results yet. Starting web research phase (attempt {retry_count + 1})."
         )
     
     # 2. If research done AND (has_documents is True AND document_chunks is empty) → route to "document"

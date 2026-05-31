@@ -17,6 +17,25 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
+# Clear any system proxy environment variables that block outbound API calls
+# Tavily, OpenAI, and LangSmith all require direct outbound connections
+for _proxy_var in [
+    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy',
+    # tavily-python can honor these explicitly if present
+    'TAVILY_HTTP_PROXY', 'TAVILY_HTTPS_PROXY', 'tavily_http_proxy', 'tavily_https_proxy',
+]:
+    os.environ.pop(_proxy_var, None)
+
+# Extra safety: ensure common API domains bypass any remaining proxy config.
+_no_proxy_domains = 'api.tavily.com,api.openai.com,api.smith.langchain.com,smith.langchain.com'
+for _no_proxy_var in ['NO_PROXY', 'no_proxy']:
+    _existing = os.environ.get(_no_proxy_var, '').strip()
+    if _existing:
+        if _no_proxy_domains not in _existing:
+            os.environ[_no_proxy_var] = f'{_existing},{_no_proxy_domains}'
+    else:
+        os.environ[_no_proxy_var] = _no_proxy_domains
+
 # Load environment
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -151,11 +170,26 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     safe_topic = topic[:40].replace(" ", "-").lower()
     run_name = f"research-report-{safe_topic}-{session_id[:8]}"
 
+    valid_pdfs = []
+    for raw_path in request.uploaded_pdfs:
+        try:
+            pdf_path = Path(raw_path).resolve()
+            if (
+                pdf_path.parent == UPLOAD_DIR.resolve()
+                and pdf_path.suffix.lower() == '.pdf'
+                and pdf_path.exists()
+            ):
+                valid_pdfs.append(str(pdf_path))
+            else:
+                logger.warning(f"Rejected invalid PDF path: {raw_path}")
+        except Exception:
+            logger.warning(f"Could not resolve PDF path: {raw_path}")
+
     # Create initial state with sanitized inputs
     initial_state = create_initial_state(
         topic=topic,
         depth=request.depth,
-        uploaded_pdfs=request.uploaded_pdfs,
+        uploaded_pdfs=valid_pdfs,
         input_urls=valid_urls
     )
     
@@ -539,10 +573,13 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
 
 @api_router.post("/upload-pdf")
 async def upload_pdf(
-    session_id: str = Form(...),
+    session_id: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
     """Upload a PDF file for document ingestion"""
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -572,7 +609,8 @@ async def upload_pdf(
     return {
         "status": "uploaded",
         "filename": file.filename,
-        "path": str(file_path)
+        "path": str(file_path),
+        "session_id": session_id
     }
 
 

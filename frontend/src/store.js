@@ -32,6 +32,7 @@ const initialState = {
   traceUrl: null,
   pollingInterval: null,
   versioning_report: null,
+  outlineEdits: '',
 };
 
 export const useStore = create((set, get) => ({
@@ -55,6 +56,8 @@ export const useStore = create((set, get) => ({
   removeFile: (index) => set((state) => ({
     uploadedFiles: state.uploadedFiles.filter((_, i) => i !== index)
   })),
+
+  setOutlineEdits: (text) => set({ outlineEdits: text }),
 
   updateOutlineSection: (index, field, value) => set((state) => {
     const newOutline = [...state.outline];
@@ -100,6 +103,32 @@ export const useStore = create((set, get) => ({
         ? inputUrls.filter(u => u && u.startsWith('http'))
         : [];
 
+      const { uploadedFiles } = get();
+      const uploadedPdfPaths = [];
+
+      if (uploadedFiles.length > 0) {
+        const tempSessionId = crypto.randomUUID();
+        for (const file of uploadedFiles) {
+          const formData = new FormData();
+          formData.append('session_id', tempSessionId);
+          formData.append('file', file);
+          try {
+            const uploadRes = await fetch('/api/upload-pdf', {
+              method: 'POST',
+              body: formData,
+            });
+            if (uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              uploadedPdfPaths.push(uploadData.path);
+            } else {
+              console.error('PDF upload failed for:', file.name);
+            }
+          } catch (err) {
+            console.error('PDF upload error:', file.name, err);
+          }
+        }
+      }
+
       const response = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -107,7 +136,7 @@ export const useStore = create((set, get) => ({
           topic: topic.trim(),
           depth: depth || 'quick',
           input_urls: parsedUrls,
-          uploaded_pdfs: [],
+          uploaded_pdfs: uploadedPdfPaths,
         }),
       });
 
@@ -260,7 +289,7 @@ export const useStore = create((set, get) => ({
         body: JSON.stringify({
           session_id: sessionId,
           outline: outlineToSend,
-          edits: null,
+          edits: get().outlineEdits || null,
         }),
       });
 

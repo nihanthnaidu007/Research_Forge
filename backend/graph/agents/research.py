@@ -12,8 +12,26 @@ from langsmith import traceable
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Initialize Tavily client
-tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+def get_tavily_client():
+    """
+    Lazily create the Tavily client.
+    We avoid module-import-time initialization so the backend can still start
+    even when `TAVILY_API_KEY` is missing (e.g. misconfigured environments).
+    """
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return None
+    try:
+        client = TavilyClient(api_key=api_key)
+        # Ensure requests ignores environment proxies.
+        # This avoids system-wide proxy env vars (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) breaking Tavily calls.
+        try:
+            client.session.trust_env = False
+        except Exception:
+            pass
+        return client
+    except Exception:
+        return None
 
 
 def extract_domain(url: str) -> str:
@@ -26,9 +44,16 @@ def extract_domain(url: str) -> str:
 
 
 @traceable(name="tavily-web-search", run_type="tool")
-def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2) -> list:
+def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2, stream_updates=None, timestamp: str = None) -> list:
     """Execute a single Tavily search with retry logic"""
     import time
+
+    tavily_client = get_tavily_client()
+    if tavily_client is None:
+        if stream_updates is not None:
+            prefix = f"[{timestamp}] " if timestamp else ""
+            stream_updates.append(f"{prefix}\u2717 Tavily client unavailable (missing TAVILY_API_KEY).")
+        return []
 
     for attempt in range(retries + 1):
         try:
@@ -38,6 +63,11 @@ def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2) ->
                 max_results=max_results,
                 include_raw_content=False
             )
+            if stream_updates is not None:
+                prefix = f"[{timestamp}] " if timestamp else ""
+                stream_updates.append(
+                    f"{prefix}✓ Tavily returned {len(results.get('results', []))} raw results"
+                )
 
             formatted = []
             for item in results.get("results", []):
@@ -57,9 +87,19 @@ def perform_tavily_search(query: str, max_results: int = 5, retries: int = 2) ->
             if attempt < retries:
                 wait = 2 ** attempt  # 1s, 2s backoff
                 logger.warning(f"Tavily search attempt {attempt + 1} failed for '{query[:40]}': {str(e)}. Retrying in {wait}s...")
+                if stream_updates is not None:
+                    prefix = f"[{timestamp}] " if timestamp else ""
+                    stream_updates.append(
+                        f"{prefix}\u2717 Tavily search attempt {attempt + 1} failed: {str(e)}"
+                    )
                 time.sleep(wait)
             else:
                 logger.error(f"Tavily search failed after {retries + 1} attempts for '{query[:40]}': {str(e)}")
+                if stream_updates is not None:
+                    prefix = f"[{timestamp}] " if timestamp else ""
+                    stream_updates.append(
+                        f"{prefix}\u2717 Tavily search failed after {retries + 1} attempts: {str(e)}"
+                    )
                 return []
     return []
 
@@ -74,6 +114,13 @@ def research_node(state: dict) -> dict:
     topic = state.get("topic", "")
     
     state["stream_updates"].append(f"[{timestamp}] Research Agent → Starting web research for: {topic}")
+
+    # Debug signal: confirm whether this backend process has a Tavily API key.
+    # (We don't print the key value to avoid leaking secrets.)
+    key_present = bool(os.getenv("TAVILY_API_KEY"))
+    state["stream_updates"].append(
+        f"[{timestamp}] Research Agent → Tavily API key present: {'yes' if key_present else 'no'}"
+    )
     
     try:
         # Define search queries
@@ -88,7 +135,11 @@ def research_node(state: dict) -> dict:
         
         for query in queries:
             state["stream_updates"].append(f"[{timestamp}] Research Agent → Searching: {query[:50]}...")
-            results = perform_tavily_search(query)
+            results = perform_tavily_search(
+                query,
+                stream_updates=state["stream_updates"],
+                timestamp=timestamp
+            )
             
             # Deduplicate by URL
             for result in results:
@@ -106,8 +157,22 @@ def research_node(state: dict) -> dict:
             logger.warning(error_msg)
             # Continue anyway \u2014 let downstream agents handle empty research gracefully
 
+        # Increment retry counter so supervisor can detect repeated failures
+        state["retry_count"] = state.get("retry_count", 0) + 1
+
         # Limit to top 15 results
         state["research_results"] = all_results[:15]
+        
+        if not all_results:
+            state["error"] = (
+                "Research returned no results after searching Tavily. "
+                "Possible causes: invalid TAVILY_API_KEY, network connectivity issue, or proxy blocking outbound requests. "
+                "Check backend/.env and network settings."
+            )
+            state["stream_updates"].append(
+                f"[{timestamp}] \u2717 Research Agent \u2192 No results found. Check TAVILY_API_KEY and network. "
+                f"Attempt {state['retry_count']} of 3."
+            )
         
         # Update status
         state["completed_agents"].append("research")

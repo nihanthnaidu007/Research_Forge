@@ -6,11 +6,13 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 
-export function OutlineApprovalZone({ 
-  outline, 
-  onUpdateSection, 
-  onApprove, 
-  isLoading 
+export function OutlineApprovalZone({
+  outline,
+  onUpdateSection,
+  onApprove,
+  isLoading,
+  outlineEdits,
+  onEditsChange
 }) {
   // Track which sections the user actually edited
   const [editedSections, setEditedSections] = useState(new Set());
@@ -168,6 +170,19 @@ export function OutlineApprovalZone({
           ✓ No changes detected — approving will reuse all existing content instantly.
         </div>
       )}
+
+      <div className="mt-4">
+        <label className="block text-xs font-mono text-zinc-500 uppercase tracking-wider mb-2">
+          Additional guidance for synthesis (optional)
+        </label>
+        <textarea
+          className="w-full bg-zinc-900 border border-zinc-700 rounded-sm text-zinc-300 text-sm p-3 resize-none focus:outline-none focus:border-cyan-500/50 placeholder-zinc-600"
+          rows={3}
+          placeholder="e.g. Focus more on recent data. Avoid speculative claims."
+          value={outlineEdits}
+          onChange={(e) => onEditsChange(e.target.value)}
+        />
+      </div>
 
       {/* Approve Button */}
       <motion.div
