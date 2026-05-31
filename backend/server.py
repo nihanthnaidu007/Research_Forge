@@ -42,9 +42,10 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Import graph components
 from graph.state import create_initial_state
-from graph.graph import get_graph
+from graph.graph import get_graph, get_checkpointer
 from eval.langsmith_tracer import get_langsmith_config, is_tracing_enabled, get_trace_url, setup_tracing
 from utils.clients import validate_env_vars
+from db import setup_db, create_session, get_session, update_session, cleanup_old_sessions as db_cleanup_sessions
 
 # Create the main app
 app = FastAPI(
@@ -100,33 +101,6 @@ class ReportSession(BaseModel):
     state: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-# --- In-memory session storage (for demo) ---
-sessions = {}
-
-# Session TTL: clean up sessions older than 2 hours
-SESSION_TTL_SECONDS = 7200
-
-async def cleanup_old_sessions():
-    """Remove sessions older than SESSION_TTL_SECONDS"""
-    now = datetime.now(timezone.utc)
-    to_delete = []
-    for sid, session in sessions.items():
-        created_at_str = session.get("created_at", "")
-        try:
-            created_at = datetime.fromisoformat(created_at_str)
-            if (now - created_at).total_seconds() > SESSION_TTL_SECONDS:
-                to_delete.append(sid)
-        except (ValueError, TypeError):
-            pass
-    
-    for sid in to_delete:
-        del sessions[sid]
-        logger.info(f"Cleaned up expired session: {sid}")
-    
-    if to_delete:
-        logger.info(f"Session cleanup: removed {len(to_delete)} expired sessions")
 
 
 # --- API Endpoints ---
@@ -195,16 +169,16 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     )
     
     # Store session
-    sessions[session_id] = {
+    await asyncio.to_thread(create_session, session_id, {
         "id": session_id,
         "topic": topic,
         "depth": request.depth,
         "status": "running",
-        "state": initial_state,
         "run_name": run_name,
         "trace_url": get_trace_url() if is_tracing_enabled() else None,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+        "state": initial_state,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
     
     # Run graph in background
     background_tasks.add_task(run_graph_async, session_id)
@@ -222,7 +196,7 @@ async def run_graph_async(session_id: str):
     The graph runs until it hits interrupt_before=['synthesis'] or completes.
     Uses thread_id for state persistence across invocations.
     """
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         logger.warning(f"Session {session_id} not found in run_graph_async")
         return
@@ -252,7 +226,7 @@ async def run_graph_async(session_id: str):
 
         # Update session with result
         session["state"] = result
-        sessions[session_id] = session
+        await asyncio.to_thread(update_session, session_id, {"state": result})
 
         # Determine status from result
         next_agent = result.get("next_agent", "END")
@@ -267,18 +241,26 @@ async def run_graph_async(session_id: str):
             session["state"]["stream_updates"].append(
                 f"[{timestamp}] ⏸ Graph paused - outline ready for review (interrupt checkpoint saved)"
             )
+            await asyncio.to_thread(update_session, session_id, {
+                "status": "waiting_approval",
+                "state": session["state"],
+            })
             logger.info(f"Session {session_id} paused at interrupt checkpoint - waiting for outline approval")
         elif is_complete or next_agent == "END":
             session["status"] = "complete"
+            await asyncio.to_thread(update_session, session_id, {"status": "complete"})
             logger.info(f"Session {session_id} completed successfully")
         elif has_error:
             session["status"] = "error"
+            session["state"]["error"] = has_error
+            await asyncio.to_thread(update_session, session_id, {
+                "status": "error",
+                "state": session["state"],
+            })
             logger.error(f"Session {session_id} error: {has_error}")
         else:
             session["status"] = "complete"
-
-        session["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sessions[session_id] = session
+            await asyncio.to_thread(update_session, session_id, {"status": "complete"})
 
     except Exception as e:
         error_msg = str(e)
@@ -286,10 +268,13 @@ async def run_graph_async(session_id: str):
         import traceback
         logger.error(traceback.format_exc())
 
-        if session_id in sessions:
-            sessions[session_id]["status"] = "error"
-            sessions[session_id]["state"]["error"] = error_msg
-            sessions[session_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = error_msg
+            await asyncio.to_thread(update_session, session_id, {
+                "status": "error",
+                "state": existing["state"],
+            })
 
 
 async def resume_graph_after_approval(session_id: str, updated_state: dict):
@@ -303,7 +288,7 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
     Passing the full state to invoke() would start a NEW execution and hit the
     interrupt_before=['synthesis'] again. None tells LangGraph to continue.
     """
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         logger.warning(f"Session {session_id} not found in resume_graph_after_approval")
         return
@@ -355,7 +340,10 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
 
             # Update session state after each section so streaming UI sees progress
             session["state"] = result
-            sessions[session_id] = session
+            await asyncio.to_thread(update_session, session_id, {
+                "state": result,
+                "status": session["status"],
+            })
 
             is_complete = result.get("is_complete", False)
             has_error = result.get("error")
@@ -369,10 +357,18 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
 
             if is_complete or next_agent == "END":
                 session["status"] = "complete"
+                await asyncio.to_thread(update_session, session_id, {
+                    "status": session["status"],
+                    "state": session["state"],
+                })
                 logger.info(f"Session {session_id} completed after outline approval")
                 break
             elif has_error:
                 session["status"] = "error"
+                await asyncio.to_thread(update_session, session_id, {
+                    "status": session["status"],
+                    "state": session["state"],
+                })
                 logger.error(f"Session {session_id} error after resume: {has_error}")
                 break
             # Otherwise interrupt fired again (next synthesis call) - keep resuming
@@ -381,9 +377,10 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
             logger.warning(f"Session {session_id} hit max resume iterations ({max_iterations})")
             session["status"] = "error"
             session["state"]["error"] = "Graph did not complete within expected iterations"
-
-        session["updated_at"] = datetime.now(timezone.utc).isoformat()
-        sessions[session_id] = session
+            await asyncio.to_thread(update_session, session_id, {
+                "status": session["status"],
+                "state": session["state"],
+            })
 
     except Exception as e:
         error_msg = str(e)
@@ -391,16 +388,19 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
         import traceback
         logger.error(traceback.format_exc())
 
-        if session_id in sessions:
-            sessions[session_id]["status"] = "error"
-            sessions[session_id]["state"]["error"] = error_msg
-            sessions[session_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = error_msg
+            await asyncio.to_thread(update_session, session_id, {
+                "status": "error",
+                "state": existing["state"],
+            })
 
 
 @api_router.get("/session/{session_id}/status")
 async def get_session_status(session_id: str):
     """Lightweight status check - returns only orchestration fields, not full state"""
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -434,26 +434,26 @@ async def get_session_status(session_id: str):
 
 
 @api_router.get("/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session_endpoint(session_id: str):
     """Get current session state"""
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     return session
 
 
 @api_router.get("/session/{session_id}/stream")
 async def stream_session(session_id: str):
     """Stream session updates via SSE"""
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     async def generate():
         last_update_count = 0
         while True:
-            session = sessions.get(session_id)
+            session = await asyncio.to_thread(get_session, session_id)
             if not session:
                 break
             
@@ -501,7 +501,7 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
     Uses the same thread_id (session_id) to resume from the interrupt checkpoint.
     The graph continues from synthesis - research, factcheck, outline do NOT re-run.
     """
-    session = sessions.get(request.session_id)
+    session = await asyncio.to_thread(get_session, request.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -559,10 +559,11 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
 
     logger.info(f"Versioning diff for session {request.session_id}: {versioning_report['summary']}")
 
-    session["versioning_report"] = versioning_report
-    session["state"] = state
-    session["status"] = "running"
-    sessions[request.session_id] = session
+    await asyncio.to_thread(update_session, request.session_id, {
+        "status": "running",
+        "state": state,
+        "versioning_report": versioning_report,
+    })
 
     # Resume graph from interrupt checkpoint using the SAME thread_id
     # This is the key difference from the old approach - we pass the UPDATED state
@@ -599,7 +600,7 @@ async def upload_pdf(
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     # If session exists, update its state
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if session:
         state = session["state"]
         uploaded_pdfs = state.get("uploaded_pdfs", [])
@@ -607,8 +608,7 @@ async def upload_pdf(
             uploaded_pdfs.append(str(file_path))
         state["uploaded_pdfs"] = uploaded_pdfs
         state["has_documents"] = True
-        session["state"] = state
-        sessions[session_id] = session
+        await asyncio.to_thread(update_session, session_id, {"state": state})
 
     logger.info(f"Uploaded PDF: {file.filename} -> {file_path}")
     return {
@@ -622,7 +622,7 @@ async def upload_pdf(
 @api_router.post("/export-pdf")
 async def export_pdf_endpoint(session_id: str):
     """Export completed report as a styled PDF and return it as a file download"""
-    session = sessions.get(session_id)
+    session = await asyncio.to_thread(get_session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -687,17 +687,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SESSION_TTL_SECONDS = 7200
+
+
+def _cleanup_sessions_and_files() -> None:
+    """
+    Delete expired sessions from the database and remove their files from disk.
+    Runs in a thread pool worker via asyncio.to_thread.
+    """
+    deleted = db_cleanup_sessions(SESSION_TTL_SECONDS)
+    if not deleted:
+        return
+
+    for session_info in deleted:
+        # Delete uploaded PDFs associated with this session
+        for pdf_path in session_info.get("uploaded_pdfs", []):
+            try:
+                Path(pdf_path).unlink(missing_ok=True)
+                logger.info(f"Deleted uploaded PDF: {pdf_path}")
+            except Exception as e:
+                logger.warning(f"Could not delete PDF {pdf_path}: {e}")
+
+        # Delete generated report PDF if it exists
+        session_id = session_info["id"]
+        pdf_dir = Path("/tmp/researchforge_pdfs")
+        for pdf_file in pdf_dir.glob(f"researchforge-*-{session_id[:8]}.pdf"):
+            try:
+                pdf_file.unlink(missing_ok=True)
+                logger.info(f"Deleted report PDF: {pdf_file}")
+            except Exception as e:
+                logger.warning(f"Could not delete report PDF {pdf_file}: {e}")
+
+    logger.info(f"Session cleanup complete: removed {len(deleted)} expired sessions")
+
+
 @app.on_event("startup")
 async def start_cleanup_task():
     """Schedule periodic session cleanup and verify tracing"""
     validate_env_vars()
+    await asyncio.to_thread(setup_db)
+    await asyncio.to_thread(get_checkpointer)
     setup_tracing()
 
     async def run_cleanup_loop():
         while True:
-            await asyncio.sleep(1800)  # Every 30 minutes
-            await cleanup_old_sessions()
-    
-    asyncio.create_task(run_cleanup_loop())
+            await asyncio.sleep(1800)
+            await asyncio.to_thread(_cleanup_sessions_and_files)
+
+    cleanup_task = asyncio.create_task(run_cleanup_loop())
+    # Store reference to prevent garbage collection
+    app.state.cleanup_task = cleanup_task
     logger.info("ResearchForge API started \u2014 session cleanup scheduled every 30 minutes")
 

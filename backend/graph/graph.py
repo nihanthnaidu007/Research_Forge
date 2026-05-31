@@ -4,10 +4,13 @@ Orchestrates the multi-agent workflow with interrupt() support for human-in-the-
 Uses Send() API for parallel fact-checking.
 """
 import logging
+import os
 from datetime import datetime
+from typing import Optional
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
 from graph.state import ReportState
 from graph.supervisor import supervisor_node
 from graph.agents.research import research_node
@@ -92,6 +95,26 @@ def factcheck_merge_node(state: dict) -> dict:
     return state
 
 
+def get_checkpointer() -> PostgresSaver:
+    """
+    Return the shared PostgresSaver checkpointer, creating it on first call.
+    Uses a dedicated connection pool for LangGraph checkpoint operations.
+    """
+    global _checkpointer
+    if _checkpointer is None:
+        db_url = os.getenv("DATABASE_URL")
+        pool = ConnectionPool(
+            db_url,
+            min_size=2,
+            max_size=10,
+            kwargs={"autocommit": True},
+        )
+        _checkpointer = PostgresSaver(pool)
+        _checkpointer.setup()
+        logger.info("PostgresSaver checkpointer initialized")
+    return _checkpointer
+
+
 def build_graph():
     """
     Build and compile the LangGraph workflow.
@@ -151,32 +174,23 @@ def build_graph():
     workflow.add_edge("factcheck_single", "factcheck_merge")
     workflow.add_edge("factcheck_merge", "supervisor")
 
-    # MemorySaver checkpointer enables interrupt() and state persistence across invocations
-    memory = MemorySaver()
-
     # interrupt_before=["synthesis"] means the graph pauses BEFORE synthesis runs
     # This gives the user a chance to review and edit the outline before writing begins
     return workflow.compile(
-        checkpointer=memory,
+        checkpointer=get_checkpointer(),
         interrupt_before=["synthesis"]
     )
 
 
 # Module-level compiled graph instance (singleton)
 _compiled_graph = None
-_memory = None
+_checkpointer: Optional[PostgresSaver] = None
 
 
 def get_graph():
     """Get or create the compiled graph with MemorySaver"""
-    global _compiled_graph, _memory
+    global _compiled_graph
     if _compiled_graph is None:
         _compiled_graph = build_graph()
-        logger.info("Graph compiled with MemorySaver + Send() parallel factcheck + interrupt_before=['synthesis']")
+        logger.info("Graph compiled with PostgresSaver + Send() parallel factcheck + interrupt_before=['synthesis']")
     return _compiled_graph
-
-
-def get_memory():
-    """Get the MemorySaver instance for direct state access"""
-    get_graph()  # Ensure graph is compiled
-    return _memory

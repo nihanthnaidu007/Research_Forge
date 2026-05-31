@@ -18,6 +18,7 @@ _tavily_client: TavilyClient | None = None
 REQUIRED_ENV_VARS = {
     "OPENAI_API_KEY": "OpenAI API key — required for all LLM calls",
     "TAVILY_API_KEY": "Tavily API key — required for web research",
+    "DATABASE_URL": "PostgreSQL connection string — required for session persistence",
 }
 
 
