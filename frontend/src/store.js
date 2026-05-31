@@ -12,7 +12,7 @@ export const AGENTS = [
 // Module-level polling handle. Lives outside Zustand to avoid
 // storing non-serializable timer IDs in state, which causes
 // unnecessary re-renders and breaks DevTools time-travel.
-const _polling = { intervalId: null };
+const _polling = { intervalId: null, errorCount: 0 };
 
 const initialState = {
   sessionId: null,
@@ -79,7 +79,7 @@ export const useStore = create((set, get) => ({
 
     // Clear any existing polling BEFORE resetting state
     if (_polling.intervalId) {
-      clearInterval(_polling.intervalId);
+      clearTimeout(_polling.intervalId);
       _polling.intervalId = null;
     }
 
@@ -104,7 +104,9 @@ export const useStore = create((set, get) => ({
 
     try {
       const parsedUrls = Array.isArray(inputUrls)
-        ? inputUrls.filter(u => u && u.startsWith('http'))
+        ? inputUrls.filter(u =>
+            u && (u.startsWith('http://') || u.startsWith('https://'))
+          )
         : [];
 
       const { uploadedFiles } = get();
@@ -186,39 +188,41 @@ export const useStore = create((set, get) => ({
 
   startPolling: (sessionId) => {
     if (_polling.intervalId) {
-      clearInterval(_polling.intervalId);
+      clearTimeout(_polling.intervalId);
       _polling.intervalId = null;
     }
+    _polling.errorCount = 0;
 
-    const interval = setInterval(async () => {
-      // Guard: abort if the session changed while this callback was queued
-      if (get().sessionId !== sessionId) {
-        clearInterval(interval);
-        return;
-      }
+    const poll = async () => {
+      // Guard: abort if the session changed
+      if (get().sessionId !== sessionId) return;
 
       try {
         const response = await fetch(`/api/session/${sessionId}/status`);
 
-        // Double-check session hasn't changed while fetch was in flight
-        if (get().sessionId !== sessionId) {
-          clearInterval(interval);
-          return;
-        }
+        if (get().sessionId !== sessionId) return;
 
         if (!response.ok) {
           if (response.status === 404) {
-            clearInterval(_polling.intervalId);
             _polling.intervalId = null;
             set({ status: 'error', error: 'Session not found' });
             return;
           }
+          // Non-404 error — schedule next poll with backoff
+          _polling.errorCount = (_polling.errorCount || 0) + 1;
+          const backoffDelay = Math.min(
+            2000 * Math.pow(2, _polling.errorCount - 1),
+            30000
+          );
+          _polling.intervalId = setTimeout(poll, backoffDelay);
           return;
         }
 
+        // Success — reset error count
+        _polling.errorCount = 0;
+
         const data = await response.json();
 
-        // Build a single atomic state update to prevent intermediate renders
         const stateUpdate = {
           status: data.status,
           currentAgent: data.current_agent || '',
@@ -235,8 +239,8 @@ export const useStore = create((set, get) => ({
           },
         };
 
-        // Include outline in the SAME set() call to avoid split renders
-        if (data.status === 'waiting_approval' && data.outline && data.outline.length > 0) {
+        if (data.status === 'waiting_approval' &&
+            data.outline && data.outline.length > 0) {
           stateUpdate.outline = data.outline;
         }
 
@@ -247,31 +251,50 @@ export const useStore = create((set, get) => ({
         set(stateUpdate);
 
         if (data.status === 'waiting_approval') {
-          clearInterval(_polling.intervalId);
           _polling.intervalId = null;
           return;
         }
 
         if (data.status === 'complete') {
-          clearInterval(_polling.intervalId);
           _polling.intervalId = null;
           get().fetchFullReport(sessionId);
           return;
         }
 
         if (data.status === 'error') {
-          clearInterval(_polling.intervalId);
           _polling.intervalId = null;
           set({ error: data.error || 'An error occurred' });
           return;
         }
 
+        // Choose next poll delay based on current phase
+        // research/document/factcheck: 5s (slow phase, infrequent updates)
+        // outline: 3s
+        // synthesis: 2s (one section at a time, want responsive updates)
+        // running (unknown agent): 3s default
+        const agent = data.current_agent || '';
+        let delay = 3000;
+        if (['research', 'document', 'factcheck'].includes(agent)) {
+          delay = 5000;
+        } else if (agent === 'synthesis') {
+          delay = 2000;
+        }
+
+        _polling.intervalId = setTimeout(poll, delay);
+
       } catch (err) {
         console.error('Polling error:', err);
+        _polling.errorCount = (_polling.errorCount || 0) + 1;
+        const backoffDelay = Math.min(
+          2000 * Math.pow(2, _polling.errorCount - 1),
+          30000
+        );
+        _polling.intervalId = setTimeout(poll, backoffDelay);
       }
-    }, 2000);
+    };
 
-    _polling.intervalId = interval;
+    // Start the first poll immediately
+    poll();
   },
 
   fetchFullReport: async (sessionId) => {
@@ -346,9 +369,10 @@ export const useStore = create((set, get) => ({
 
   resetReport: () => {
     if (_polling.intervalId) {
-      clearInterval(_polling.intervalId);
+      clearTimeout(_polling.intervalId);
       _polling.intervalId = null;
     }
+    _polling.errorCount = 0;
 
     set({
       ...initialState,
