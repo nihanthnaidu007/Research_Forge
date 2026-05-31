@@ -9,6 +9,11 @@ export const AGENTS = [
   { key: 'citations', label: 'Citations', icon: 'Quote', description: 'Formatting references' },
 ];
 
+// Module-level polling handle. Lives outside Zustand to avoid
+// storing non-serializable timer IDs in state, which causes
+// unnecessary re-renders and breaks DevTools time-travel.
+const _polling = { intervalId: null };
+
 const initialState = {
   sessionId: null,
   status: 'idle',
@@ -30,7 +35,6 @@ const initialState = {
   error: null,
   isLoading: false,
   traceUrl: null,
-  pollingInterval: null,
   versioning_report: null,
   outlineEdits: '',
 };
@@ -66,7 +70,7 @@ export const useStore = create((set, get) => ({
   }),
 
   startReport: async () => {
-    const { topic, depth, inputUrls, pollingInterval } = get();
+    const { topic, depth, inputUrls } = get();
 
     if (!topic || !topic.trim() || topic.trim().length < 3) {
       set({ error: 'Please enter a research topic (minimum 3 characters)' });
@@ -74,8 +78,9 @@ export const useStore = create((set, get) => ({
     }
 
     // Clear any existing polling BEFORE resetting state
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
+    if (_polling.intervalId) {
+      clearInterval(_polling.intervalId);
+      _polling.intervalId = null;
     }
 
     set({
@@ -93,7 +98,6 @@ export const useStore = create((set, get) => ({
       currentAgent: '',
       completedAgents: [],
       traceUrl: null,
-      pollingInterval: null,
       agentStats: { sourcesFound: 0, claimsChecked: 0, sectionsWritten: 0, totalSections: 0 },
       isLoading: true,
     });
@@ -129,16 +133,35 @@ export const useStore = create((set, get) => ({
         }
       }
 
-      const response = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic: topic.trim(),
-          depth: depth || 'quick',
-          input_urls: parsedUrls,
-          uploaded_pdfs: uploadedPdfPaths,
-        }),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      let response;
+      try {
+        response = await fetch('/api/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: topic.trim(),
+            depth: depth || 'quick',
+            input_urls: parsedUrls,
+            uploaded_pdfs: uploadedPdfPaths,
+          }),
+          signal: controller.signal,
+        });
+      } catch (fetchErr) {
+        if (fetchErr.name === 'AbortError') {
+          set({
+            status: 'error',
+            error: 'Request timed out. The server took too long to respond.',
+            isLoading: false,
+          });
+          return;
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
@@ -162,8 +185,10 @@ export const useStore = create((set, get) => ({
   },
 
   startPolling: (sessionId) => {
-    const existing = get().pollingInterval;
-    if (existing) clearInterval(existing);
+    if (_polling.intervalId) {
+      clearInterval(_polling.intervalId);
+      _polling.intervalId = null;
+    }
 
     const interval = setInterval(async () => {
       // Guard: abort if the session changed while this callback was queued
@@ -183,8 +208,9 @@ export const useStore = create((set, get) => ({
 
         if (!response.ok) {
           if (response.status === 404) {
-            clearInterval(interval);
-            set({ pollingInterval: null, status: 'error', error: 'Session not found' });
+            clearInterval(_polling.intervalId);
+            _polling.intervalId = null;
+            set({ status: 'error', error: 'Session not found' });
             return;
           }
           return;
@@ -221,21 +247,22 @@ export const useStore = create((set, get) => ({
         set(stateUpdate);
 
         if (data.status === 'waiting_approval') {
-          clearInterval(interval);
-          set({ pollingInterval: null });
+          clearInterval(_polling.intervalId);
+          _polling.intervalId = null;
           return;
         }
 
         if (data.status === 'complete') {
-          clearInterval(interval);
-          set({ pollingInterval: null });
+          clearInterval(_polling.intervalId);
+          _polling.intervalId = null;
           get().fetchFullReport(sessionId);
           return;
         }
 
         if (data.status === 'error') {
-          clearInterval(interval);
-          set({ pollingInterval: null, error: data.error || 'An error occurred' });
+          clearInterval(_polling.intervalId);
+          _polling.intervalId = null;
+          set({ error: data.error || 'An error occurred' });
           return;
         }
 
@@ -244,10 +271,15 @@ export const useStore = create((set, get) => ({
       }
     }, 2000);
 
-    set({ pollingInterval: interval });
+    _polling.intervalId = interval;
   },
 
   fetchFullReport: async (sessionId) => {
+    // Guard: abort if the session changed while this was queued.
+    // Without this, a stale response from a previous report can
+    // overwrite the new session's state after the user starts over.
+    if (get().sessionId !== sessionId) return;
+
     try {
       const response = await fetch(`/api/session/${sessionId}`);
       if (!response.ok) return;
@@ -313,8 +345,10 @@ export const useStore = create((set, get) => ({
   },
 
   resetReport: () => {
-    const { pollingInterval } = get();
-    if (pollingInterval) clearInterval(pollingInterval);
+    if (_polling.intervalId) {
+      clearInterval(_polling.intervalId);
+      _polling.intervalId = null;
+    }
 
     set({
       ...initialState,
