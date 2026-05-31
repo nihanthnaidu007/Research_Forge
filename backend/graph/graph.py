@@ -30,6 +30,9 @@ def route_from_supervisor(state: dict) -> str:
     return state.get("next_agent", "END")
 
 
+# Concurrency cap for parallel fact-checking is enforced inside
+# factcheck_single_node via _factcheck_semaphore in factcheck_parallel.py.
+# No cap is needed at the fan-out level — the semaphore handles it.
 def fan_out_claims(state: dict):
     """
     Fan-out function for Send() API.

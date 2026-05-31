@@ -4,6 +4,7 @@ Used by the Send() API to process individual claims in parallel.
 """
 import os
 import json
+import asyncio
 import logging
 from typing import TypedDict, List
 from utils.clients import get_openai_client
@@ -21,6 +22,12 @@ VERDICT_SCORES = {
     "PARTIALLY_SUPPORTED": 0.6,
     "UNSUPPORTED": 0.2
 }
+
+# Maximum number of concurrent OpenAI calls during parallel fact-checking.
+# Set to 5 to stay within OpenAI tier-1 RPM limits across concurrent sessions.
+# Increase if your API tier supports higher request rates.
+MAX_CONCURRENT_FACTCHECK_CALLS = 5
+_factcheck_semaphore = asyncio.Semaphore(MAX_CONCURRENT_FACTCHECK_CALLS)
 
 
 class SingleClaimState(TypedDict):
@@ -98,11 +105,31 @@ def factcheck_single_node(state: dict) -> dict:
     """
     LangGraph node that processes exactly one claim.
     Invoked in parallel by the Send() API fan-out.
-    
-    Receives: {claim, sources} via Send()
-    Returns: partial ReportState update with result in parallel_fact_check_results
+    Semaphore limits concurrent OpenAI calls to MAX_CONCURRENT_FACTCHECK_CALLS.
     """
-    result = judge_single_claim_parallel(state["claim"], state["sources"])
-    # Return a partial state update — the operator.add reducer on
-    # parallel_fact_check_results accumulates results from all parallel nodes
+    import asyncio as _asyncio
+
+    async def _run():
+        async with _factcheck_semaphore:
+            return judge_single_claim_parallel(
+                state["claim"], state["sources"]
+            )
+
+    try:
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            # We are inside an async context (LangGraph async execution).
+            # Use asyncio.run_coroutine_threadsafe via the running loop.
+            import concurrent.futures
+            future = _asyncio.run_coroutine_threadsafe(_run(), loop)
+            result = future.result(timeout=290)
+        else:
+            result = loop.run_until_complete(_run())
+    except Exception:
+        # If semaphore acquisition fails for any reason, fall back to
+        # calling without the semaphore rather than failing the claim.
+        result = judge_single_claim_parallel(
+            state["claim"], state["sources"]
+        )
+
     return {"parallel_fact_check_results": [result]}
