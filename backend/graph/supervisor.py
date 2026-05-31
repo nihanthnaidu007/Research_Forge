@@ -44,7 +44,6 @@ def get_supervisor_decision(state: dict) -> SupervisorDecision:
     outline_approved = state.get("outline_approved", False)
     approved_outline = state.get("approved_outline", [])
     written_sections = state.get("written_sections", [])
-    sources = state.get("sources", [])
 
     # Routing rules
     # 1. If research_results is empty → route to "research"

@@ -909,7 +909,9 @@ async def upload_pdf(
         with open(file_path, "wb") as buffer:
             buffer.write(content)
     except Exception:
-        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+        raise HTTPException(
+            status_code=500, detail="Failed to save uploaded file"
+        ) from None
 
     # If session exists, update its state
     session = await asyncio.to_thread(get_session, session_id)
@@ -999,13 +1001,13 @@ async def export_pdf_endpoint(session_id: str):
         logger.error(f"PDF export validation error for session {session_id}: {str(e)}")
         raise HTTPException(
             status_code=400, detail="PDF generation failed — invalid report state"
-        )
+        ) from e
     except Exception as e:
         logger.error(f"PDF export error for session {session_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail="PDF generation failed — check server logs for details",
-        )
+        ) from e
 
 
 # --- Include router and middleware ---

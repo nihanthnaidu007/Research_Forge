@@ -29,3 +29,4 @@ line-ending = "lf"
 
 [lint.per-file-ignores]
 "backend/graph/agents/*.py" = ["B006"]
+"backend/server.py" = ["E402"]
