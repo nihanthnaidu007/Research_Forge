@@ -8,6 +8,7 @@ from typing import List
 import httpx
 from bs4 import BeautifulSoup
 from utils.clients import get_openai_client
+from utils.validation import validate_url
 from dotenv import load_dotenv
 from langsmith import traceable
 
@@ -52,6 +53,10 @@ def extract_url_chunks(url: str) -> List[dict]:
     Split into chunks of ~500 words each.
     """
     chunks = []
+    is_safe, reason = validate_url(url)
+    if not is_safe:
+        logger.warning(f"Skipping unsafe URL in document agent: {reason}")
+        return chunks
     try:
         response = httpx.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()

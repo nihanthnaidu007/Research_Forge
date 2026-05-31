@@ -45,6 +45,7 @@ from graph.state import create_initial_state
 from graph.graph import get_graph, get_checkpointer
 from eval.langsmith_tracer import get_langsmith_config, is_tracing_enabled, get_trace_url, setup_tracing
 from utils.clients import validate_env_vars
+from utils.validation import validate_url
 from db import setup_db, create_session, get_session, update_session, cleanup_old_sessions as db_cleanup_sessions
 
 # Create the main app
@@ -134,10 +135,13 @@ async def run_report(request: RunReportRequest, background_tasks: BackgroundTask
     valid_urls = []
     for url in request.input_urls:
         url = url.strip()
-        if url and (url.startswith("http://") or url.startswith("https://")):
+        if not url:
+            continue
+        is_safe, reason = validate_url(url)
+        if is_safe:
             valid_urls.append(url)
-        elif url:
-            logger.warning(f"Skipping invalid URL: {url}")
+        else:
+            logger.warning(f"Rejected URL '{url[:80]}': {reason}")
 
     session_id = str(uuid.uuid4())
 
