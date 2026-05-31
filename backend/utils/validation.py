@@ -3,6 +3,7 @@ ResearchForge URL validation.
 Blocks SSRF attempts by resolving hostnames and rejecting requests
 to private, loopback, link-local, and cloud metadata addresses.
 """
+
 import ipaddress
 import logging
 import socket
@@ -13,25 +14,27 @@ logger = logging.getLogger(__name__)
 # Hostnames that must always be blocked regardless of resolved IP.
 # Cloud metadata endpoints are reachable via link-local but may also
 # be accessible by name in some environments.
-BLOCKED_HOSTNAMES = frozenset({
-    "localhost",
-    "metadata.google.internal",
-    "metadata.google",
-    "169.254.169.254",
-})
+BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "metadata.google.internal",
+        "metadata.google",
+        "169.254.169.254",
+    }
+)
 
 # IP networks that are never valid targets for outbound user-supplied URLs.
 BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),       # loopback
-    ipaddress.ip_network("10.0.0.0/8"),         # private class A
-    ipaddress.ip_network("172.16.0.0/12"),      # private class B
-    ipaddress.ip_network("192.168.0.0/16"),     # private class C
-    ipaddress.ip_network("169.254.0.0/16"),     # link-local / cloud metadata
-    ipaddress.ip_network("100.64.0.0/10"),      # shared address space (RFC 6598)
-    ipaddress.ip_network("192.0.0.0/24"),       # IETF protocol assignments
-    ipaddress.ip_network("::1/128"),            # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
-    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("10.0.0.0/8"),  # private class A
+    ipaddress.ip_network("172.16.0.0/12"),  # private class B
+    ipaddress.ip_network("192.168.0.0/16"),  # private class C
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / cloud metadata
+    ipaddress.ip_network("100.64.0.0/10"),  # shared address space (RFC 6598)
+    ipaddress.ip_network("192.0.0.0/24"),  # IETF protocol assignments
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 

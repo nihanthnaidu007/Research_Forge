@@ -1,16 +1,17 @@
 """
 OutlineAgent - Generates structured report outline based on research
 """
-import os
+
 import json
 import logging
 from datetime import datetime
-from typing import List
-from utils.clients import get_openai_client
-from utils.llm_utils import call_with_retry
-from graph.state import ReportState
+
 from dotenv import load_dotenv
 from langsmith import traceable
+
+from graph.state import ReportState
+from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -50,27 +51,34 @@ Rules:
 
 
 @traceable(name="generate-outline", run_type="llm")
-def generate_outline(topic: str, depth: str, fact_check_results: List[dict], 
-                     research_results: List[dict], document_summary: str = "") -> List[dict]:
+def generate_outline(
+    topic: str,
+    depth: str,
+    fact_check_results: list[dict],
+    research_results: list[dict],
+    document_summary: str = "",
+) -> list[dict]:
     """
     Generate a report outline using LLM based on research findings.
     depth="quick" → 3 sections, depth="deep" → 6 sections
     """
     num_sections = 6 if depth == "deep" else 3
-    
+
     # Build context from research and fact-checks
     research_context = "\n".join(
         f"- {r.get('title', 'Unknown')}: {r.get('snippet', '')[:200]}"
         for r in research_results[:8]
     )
-    
+
     factcheck_context = "\n".join(
         f"- [{r.get('verdict', 'UNKNOWN')}] {r.get('claim', '')[:150]}"
         for r in fact_check_results[:6]
     )
-    
-    doc_context = f"\nDocument insights: {document_summary[:500]}" if document_summary else ""
-    
+
+    doc_context = (
+        f"\nDocument insights: {document_summary[:500]}" if document_summary else ""
+    )
+
     user_prompt = f"""Topic: {topic}
 
 Number of sections to generate: {num_sections}
@@ -93,8 +101,8 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": OUTLINE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ]
+                    {"role": "user", "content": user_prompt},
+                ],
             ),
             label="outline generate_outline",
         )
@@ -108,15 +116,19 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
         # Validate and ensure structure
         validated_outline = []
         for i, section in enumerate(raw_outline[:num_sections]):
-            validated_outline.append({
-                "section_id": section.get("section_id", f"sec_{i+1}"),
-                "title": section.get("title", f"Section {i+1}"),
-                "description": section.get("description", "Cover key findings and insights"),
-                "order": section.get("order", i + 1)
-            })
-        
+            validated_outline.append(
+                {
+                    "section_id": section.get("section_id", f"sec_{i + 1}"),
+                    "title": section.get("title", f"Section {i + 1}"),
+                    "description": section.get(
+                        "description", "Cover key findings and insights"
+                    ),
+                    "order": section.get("order", i + 1),
+                }
+            )
+
         return validated_outline
-        
+
     except Exception as e:
         logger.error(f"Outline generation error: {str(e)}")
         # Return fallback outline
@@ -130,10 +142,10 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
         )
         return [
             {
-                "section_id": f"sec_{i+1}",
+                "section_id": f"sec_{i + 1}",
                 "title": title,
                 "description": f"Cover {title.lower()} related to {topic}",
-                "order": i + 1
+                "order": i + 1,
             }
             for i, title in enumerate(sections)
         ]
@@ -151,9 +163,11 @@ def outline_node(state: ReportState) -> ReportState:
     fact_check_results = state.get("fact_check_results", [])
     research_results = state.get("research_results", [])
     document_summary = state.get("document_summary", "")
-    
-    state["stream_updates"].append(f"[{timestamp}] Outline Agent → Generating {depth} report structure...")
-    
+
+    state["stream_updates"].append(
+        f"[{timestamp}] Outline Agent → Generating {depth} report structure..."
+    )
+
     try:
         outline = generate_outline(
             topic, depth, fact_check_results, research_results, document_summary
@@ -162,8 +176,7 @@ def outline_node(state: ReportState) -> ReportState:
         # Check if the returned outline looks like the generic fallback.
         # Fallback sections always start with "Background & Context".
         is_fallback = (
-            len(outline) > 0 and
-            outline[0].get("title") == "Background & Context"
+            len(outline) > 0 and outline[0].get("title") == "Background & Context"
         )
         if is_fallback:
             state["stream_updates"].append(
@@ -174,17 +187,19 @@ def outline_node(state: ReportState) -> ReportState:
 
         state["outline"] = outline
         state["original_outline"] = outline.copy()  # Snapshot for versioning
-        state["outline_approved"] = False  # Always reset - do not rely on initial state default
-        
+        state["outline_approved"] = (
+            False  # Always reset - do not rely on initial state default
+        )
+
         # Mark as complete
         state["completed_agents"].append("outline")
-        
+
         final_msg = f"[{timestamp}] Outline Agent → Complete: generated {len(outline)}-section outline"
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
-        
+
         return state
-        
+
     except Exception as e:
         error_msg = f"[{timestamp}] Outline Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)

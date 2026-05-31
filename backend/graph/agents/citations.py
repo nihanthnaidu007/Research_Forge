@@ -1,23 +1,26 @@
 """
 CitationAgent - Deduplicates and formats all references
 """
+
 # No LLM calls in this agent — citation building is deterministic.
 # Retry wrapper is not needed here.
-import os
-import re
 import logging
+import re
 from datetime import datetime
-from typing import List
-from utils.url_utils import extract_domain
-from graph.state import ReportState
+
 from dotenv import load_dotenv
 from langsmith import traceable
+
+from graph.state import ReportState
+from utils.url_utils import extract_domain
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def build_citation_list(written_sections: List[dict], research_results: List[dict]) -> List[dict]:
+def build_citation_list(
+    written_sections: list[dict], research_results: list[dict]
+) -> list[dict]:
     """
     Collect ALL source URLs referenced across all written_sections,
     deduplicate, and assign citation numbers.
@@ -29,7 +32,7 @@ def build_citation_list(written_sections: List[dict], research_results: List[dic
         url = r.get("url", "")
         if url:
             url_to_title[url] = r.get("title", "Unknown Source")
-    
+
     # Preserve order of first appearance — do not sort alphabetically
     seen_urls_ordered = []
     seen_urls_set = set()
@@ -37,13 +40,13 @@ def build_citation_list(written_sections: List[dict], research_results: List[dic
     # First pass: collect from written sections in order (first appearance wins)
     for section in written_sections:
         content = section.get("content", "")
-        url_pattern = r'\[source:\s*(https?://[^\]]+)\]'
+        url_pattern = r"\[source:\s*(https?://[^\]]+)\]"
         matches = re.findall(url_pattern, content, re.IGNORECASE)
         for url in matches:
             if url and url not in seen_urls_set:
                 seen_urls_set.add(url)
                 seen_urls_ordered.append(url)
-        
+
         for url in section.get("sources_used", []):
             if url and url not in seen_urls_set:
                 seen_urls_set.add(url)
@@ -63,28 +66,32 @@ def build_citation_list(written_sections: List[dict], research_results: List[dic
     citations = []
     citation_number = 1
     for url in seen_urls_ordered:
-        citations.append({
-            "url": url,
-            "title": url_to_title.get(url, "External Source"),
-            "domain": extract_domain(url),
-            "citation_number": citation_number
-        })
+        citations.append(
+            {
+                "url": url,
+                "title": url_to_title.get(url, "External Source"),
+                "domain": extract_domain(url),
+                "citation_number": citation_number,
+            }
+        )
         citation_number += 1
-    
+
     return citations
 
 
-def replace_inline_citations(written_sections: List[dict], sources: List[dict]) -> List[dict]:
+def replace_inline_citations(
+    written_sections: list[dict], sources: list[dict]
+) -> list[dict]:
     """
     Replace [source: url] with [n] citation numbers in section content.
     """
     # Build URL to citation number mapping
     url_to_number = {s.get("url", ""): s.get("citation_number", 0) for s in sources}
-    
+
     updated_sections = []
     for section in written_sections:
         content = section.get("content", "")
-        
+
         # Replace [source: url] with [n]
         def replace_citation(match):
             url = match.group(1).strip()
@@ -92,15 +99,16 @@ def replace_inline_citations(written_sections: List[dict], sources: List[dict]) 
             if number:
                 return f"[{number}]"
             return match.group(0)  # Keep original if not found
-        
-        url_pattern = r'\[source:\s*(https?://[^\]]+)\]'
-        updated_content = re.sub(url_pattern, replace_citation, content,
-                                 flags=re.IGNORECASE)
-        
+
+        url_pattern = r"\[source:\s*(https?://[^\]]+)\]"
+        updated_content = re.sub(
+            url_pattern, replace_citation, content, flags=re.IGNORECASE
+        )
+
         updated_section = section.copy()
         updated_section["content"] = updated_content
         updated_sections.append(updated_section)
-    
+
     return updated_sections
 
 
@@ -113,18 +121,20 @@ def citations_node(state: ReportState) -> ReportState:
     timestamp = datetime.now().strftime("%H:%M:%S")
     written_sections = state.get("written_sections", [])
     research_results = state.get("research_results", [])
-    
-    state["stream_updates"].append(f"[{timestamp}] Citations Agent → Building citation list...")
-    
+
+    state["stream_updates"].append(
+        f"[{timestamp}] Citations Agent → Building citation list..."
+    )
+
     try:
         # Build citation list
         sources = build_citation_list(written_sections, research_results)
         state["sources"] = sources
-        
+
         # Replace inline citations
         updated_sections = replace_inline_citations(written_sections, sources)
         state["written_sections"] = updated_sections
-        
+
         # Compute definitive overall confidence from all section scores
         confidence_scores = state.get("confidence_scores", {})
         if confidence_scores:
@@ -133,17 +143,17 @@ def citations_node(state: ReportState) -> ReportState:
             )
         else:
             state["overall_confidence"] = 0.0
-        
+
         # Mark as complete
         state["completed_agents"].append("citations")
         state["is_complete"] = True
-        
+
         final_msg = f"[{timestamp}] Citations Agent → Complete: {len(sources)} unique sources cited"
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
-        
+
         return state
-        
+
     except Exception as e:
         error_msg = f"[{timestamp}] Citations Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)

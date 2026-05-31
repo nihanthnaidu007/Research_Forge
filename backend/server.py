@@ -2,55 +2,80 @@
 ResearchForge - Multi-Agent Research Report System
 FastAPI Backend with SSE Streaming
 """
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse, FileResponse
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-import os
-import logging
-import json
+
 import asyncio
+import json
+import logging
+import os
 import uuid
-import shutil
 from contextlib import asynccontextmanager
-from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pathlib import Path
+from typing import Literal
+
+from dotenv import load_dotenv
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from starlette.middleware.cors import CORSMiddleware
 
 # Clear any system proxy environment variables that block outbound API calls
 # Tavily, OpenAI, and LangSmith all require direct outbound connections
 for _proxy_var in [
-    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy',
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
     # tavily-python can honor these explicitly if present
-    'TAVILY_HTTP_PROXY', 'TAVILY_HTTPS_PROXY', 'tavily_http_proxy', 'tavily_https_proxy',
+    "TAVILY_HTTP_PROXY",
+    "TAVILY_HTTPS_PROXY",
+    "tavily_http_proxy",
+    "tavily_https_proxy",
 ]:
     os.environ.pop(_proxy_var, None)
 
 # Extra safety: ensure common API domains bypass any remaining proxy config.
-_no_proxy_domains = 'api.tavily.com,api.openai.com,api.smith.langchain.com,smith.langchain.com'
-for _no_proxy_var in ['NO_PROXY', 'no_proxy']:
-    _existing = os.environ.get(_no_proxy_var, '').strip()
+_no_proxy_domains = (
+    "api.tavily.com,api.openai.com,api.smith.langchain.com,smith.langchain.com"
+)
+for _no_proxy_var in ["NO_PROXY", "no_proxy"]:
+    _existing = os.environ.get(_no_proxy_var, "").strip()
     if _existing:
         if _no_proxy_domains not in _existing:
-            os.environ[_no_proxy_var] = f'{_existing},{_no_proxy_domains}'
+            os.environ[_no_proxy_var] = f"{_existing},{_no_proxy_domains}"
     else:
         os.environ[_no_proxy_var] = _no_proxy_domains
 
 # Load environment
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
 # Import graph components
+from db import cleanup_old_sessions as db_cleanup_sessions
+from db import create_session, get_session, setup_db, update_session
+from eval.langsmith_tracer import (
+    get_trace_url,
+    is_tracing_enabled,
+    setup_tracing,
+)
+from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
-from graph.graph import get_graph, get_checkpointer
-from eval.langsmith_tracer import get_langsmith_config, is_tracing_enabled, get_trace_url, setup_tracing
 from utils.clients import validate_env_vars
 from utils.validation import validate_url
-from db import setup_db, create_session, get_session, update_session, cleanup_old_sessions as db_cleanup_sessions
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -59,6 +84,7 @@ import uuid as _uuid
 
 class RequestIDMiddleware:
     """Injects a unique request ID into each request and response."""
+
     def __init__(self, app):
         self.app = app
 
@@ -98,7 +124,9 @@ async def lifespan(app: FastAPI):
             logger.info("Session cleanup task cancelled — shutting down")
 
     cleanup_task = asyncio.create_task(run_cleanup_loop())
-    logger.info("ResearchForge API started — session cleanup scheduled every 30 minutes")
+    logger.info(
+        "ResearchForge API started — session cleanup scheduled every 30 minutes"
+    )
 
     yield
 
@@ -128,7 +156,7 @@ api_router = APIRouter(prefix="/api")
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(process)d - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(process)d - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -140,11 +168,12 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
 # --- Pydantic Models ---
 
+
 class RunReportRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=500)
     depth: str = Field(default="quick", pattern="^(quick|deep)$")
-    input_urls: List[str] = Field(default_factory=list)
-    uploaded_pdfs: List[str] = Field(default_factory=list)
+    input_urls: list[str] = Field(default_factory=list)
+    uploaded_pdfs: list[str] = Field(default_factory=list)
 
 
 class OutlineSection(BaseModel):
@@ -156,8 +185,8 @@ class OutlineSection(BaseModel):
 
 class ApproveOutlineRequest(BaseModel):
     session_id: str
-    outline: List[OutlineSection]
-    edits: Optional[str] = None
+    outline: list[OutlineSection]
+    edits: str | None = None
 
 
 # ReportSession defines the schema for session metadata.
@@ -166,17 +195,20 @@ class ApproveOutlineRequest(BaseModel):
 # reference and is used for response validation where applicable.
 class ReportSession(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     topic: str
     depth: str
-    status: Literal["pending", "running", "waiting_approval", "complete", "error"] = "pending"
+    status: Literal["pending", "running", "waiting_approval", "complete", "error"] = (
+        "pending"
+    )
     state: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # --- API Endpoints ---
+
 
 @api_router.get("/")
 async def root():
@@ -186,6 +218,7 @@ async def root():
 def _check_db() -> None:
     """Execute a trivial query to verify database connectivity."""
     from db import get_pool
+
     with get_pool().connection() as conn:
         conn.execute("SELECT 1")
 
@@ -199,15 +232,20 @@ async def health_check():
     """
     health = {
         "status": "ok",
-        "agents": ["research", "document", "factcheck",
-                   "outline", "synthesis", "citations"],
+        "agents": [
+            "research",
+            "document",
+            "factcheck",
+            "outline",
+            "synthesis",
+            "citations",
+        ],
         "model": "gpt-4o",
-        "checks": {}
+        "checks": {},
     }
 
     # Check required env vars
-    required = ["OPENAI_API_KEY", "TAVILY_API_KEY",
-                "DATABASE_URL", "CORS_ORIGINS"]
+    required = ["OPENAI_API_KEY", "TAVILY_API_KEY", "DATABASE_URL", "CORS_ORIGINS"]
     missing = [v for v in required if not os.getenv(v, "").strip()]
     health["checks"]["env_vars"] = (
         "ok" if not missing else f"missing: {', '.join(missing)}"
@@ -224,6 +262,7 @@ async def health_check():
 
     if health["status"] != "ok":
         from fastapi.responses import JSONResponse
+
         return JSONResponse(status_code=503, content=health)
 
     return health
@@ -231,15 +270,21 @@ async def health_check():
 
 @api_router.post("/run")
 @limiter.limit("10/minute")
-async def run_report(request: Request, run_request: RunReportRequest, background_tasks: BackgroundTasks):
+async def run_report(
+    request: Request, run_request: RunReportRequest, background_tasks: BackgroundTasks
+):
     """Start a new research report generation"""
 
     # Input sanitization
     topic = run_request.topic.strip()
     if len(topic) < 5:
-        raise HTTPException(status_code=400, detail="Topic must be at least 5 characters long")
+        raise HTTPException(
+            status_code=400, detail="Topic must be at least 5 characters long"
+        )
     if len(topic) > 500:
-        raise HTTPException(status_code=400, detail="Topic must be under 500 characters")
+        raise HTTPException(
+            status_code=400, detail="Topic must be under 500 characters"
+        )
 
     # Validate URLs if provided
     valid_urls = []
@@ -265,7 +310,7 @@ async def run_report(request: Request, run_request: RunReportRequest, background
             pdf_path = Path(raw_path).resolve()
             if (
                 pdf_path.parent == UPLOAD_DIR.resolve()
-                and pdf_path.suffix.lower() == '.pdf'
+                and pdf_path.suffix.lower() == ".pdf"
                 and pdf_path.exists()
             ):
                 valid_pdfs.append(str(pdf_path))
@@ -279,28 +324,32 @@ async def run_report(request: Request, run_request: RunReportRequest, background
         topic=topic,
         depth=run_request.depth,
         uploaded_pdfs=valid_pdfs,
-        input_urls=valid_urls
+        input_urls=valid_urls,
     )
 
     # Store session
-    await asyncio.to_thread(create_session, session_id, {
-        "id": session_id,
-        "topic": topic,
-        "depth": run_request.depth,
-        "status": "running",
-        "run_name": run_name,
-        "trace_url": get_trace_url() if is_tracing_enabled() else None,
-        "state": initial_state,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    })
-    
+    await asyncio.to_thread(
+        create_session,
+        session_id,
+        {
+            "id": session_id,
+            "topic": topic,
+            "depth": run_request.depth,
+            "status": "running",
+            "run_name": run_name,
+            "trace_url": get_trace_url() if is_tracing_enabled() else None,
+            "state": initial_state,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
     # Run graph in background
     background_tasks.add_task(run_graph_async, session_id)
-    
+
     return {
         "session_id": session_id,
         "status": "running",
-        "message": f"Started research report generation for: {run_request.topic}"
+        "message": f"Started research report generation for: {run_request.topic}",
     }
 
 
@@ -328,11 +377,13 @@ async def run_graph_async(session_id: str):
             "metadata": {
                 "session_id": session_id,
                 "topic": state.get("topic", ""),
-                "project": "Multi-Agent-Research"
-            }
+                "project": "Multi-Agent-Research",
+            },
         }
 
-        logger.info(f"Starting graph execution for session {session_id}, topic: {state.get('topic', 'unknown')}")
+        logger.info(
+            f"Starting graph execution for session {session_id}, topic: {state.get('topic', 'unknown')}"
+        )
 
         # Run graph in thread to avoid blocking the async event loop
         # The graph will pause at interrupt_before=['synthesis'] automatically
@@ -355,10 +406,14 @@ async def run_graph_async(session_id: str):
                         "This can happen when external APIs are slow. "
                         "Please try again."
                     )
-                    await asyncio.to_thread(update_session, session_id, {
-                        "status": "error",
-                        "state": existing["state"],
-                    })
+                    await asyncio.to_thread(
+                        update_session,
+                        session_id,
+                        {
+                            "status": "error",
+                            "state": existing["state"],
+                        },
+                    )
             return
 
         # Update session with result
@@ -378,11 +433,17 @@ async def run_graph_async(session_id: str):
             session["state"]["stream_updates"].append(
                 f"[{timestamp}] ⏸ Graph paused - outline ready for review (interrupt checkpoint saved)"
             )
-            await asyncio.to_thread(update_session, session_id, {
-                "status": "waiting_approval",
-                "state": session["state"],
-            })
-            logger.info(f"Session {session_id} paused at interrupt checkpoint - waiting for outline approval")
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "waiting_approval",
+                    "state": session["state"],
+                },
+            )
+            logger.info(
+                f"Session {session_id} paused at interrupt checkpoint - waiting for outline approval"
+            )
         elif is_complete or next_agent == "END":
             session["status"] = "complete"
             await asyncio.to_thread(update_session, session_id, {"status": "complete"})
@@ -390,10 +451,14 @@ async def run_graph_async(session_id: str):
         elif has_error:
             session["status"] = "error"
             session["state"]["error"] = has_error
-            await asyncio.to_thread(update_session, session_id, {
-                "status": "error",
-                "state": session["state"],
-            })
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": session["state"],
+                },
+            )
             logger.error(f"Session {session_id} error: {has_error}")
         else:
             session["status"] = "complete"
@@ -403,25 +468,30 @@ async def run_graph_async(session_id: str):
         error_msg = str(e)
         logger.error(f"Graph execution error for session {session_id}: {error_msg}")
         import traceback
+
         logger.error(traceback.format_exc())
 
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = error_msg
-            await asyncio.to_thread(update_session, session_id, {
-                "status": "error",
-                "state": existing["state"],
-            })
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
 
 
 async def resume_graph_after_approval(session_id: str, updated_state: dict):
     """
     Resume the graph from the interrupt checkpoint after outline approval.
-    
+
     Critical LangGraph pattern:
       1. graph.update_state(config, updates) - merge approved outline into checkpoint
       2. graph.invoke(None, config) - None input = resume from interrupt, NOT restart
-    
+
     Passing the full state to invoke() would start a NEW execution and hit the
     interrupt_before=['synthesis'] again. None tells LangGraph to continue.
     """
@@ -442,8 +512,8 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
                 "session_id": session_id,
                 "topic": updated_state.get("topic", ""),
                 "phase": "synthesis-resume",
-                "project": "Multi-Agent-Research"
-            }
+                "project": "Multi-Agent-Research",
+            },
         }
 
         logger.info(f"Resuming graph from checkpoint for session {session_id}")
@@ -458,10 +528,14 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
             "original_outline": updated_state.get("original_outline", []),
             "stream_updates": updated_state.get("stream_updates", []),
             "changed_section_ids": updated_state.get("changed_section_ids", []),
-            "sections_needing_rewrite": updated_state.get("sections_needing_rewrite", []),
+            "sections_needing_rewrite": updated_state.get(
+                "sections_needing_rewrite", []
+            ),
         }
         await asyncio.to_thread(graph.update_state, config, state_updates)
-        logger.info(f"Checkpoint state updated for session {session_id} - outline_approved=True")
+        logger.info(
+            f"Checkpoint state updated for session {session_id} - outline_approved=True"
+        )
 
         # Step 2: Resume from interrupt by passing None as input
         # interrupt_before=["synthesis"] fires for EVERY synthesis call (one per section).
@@ -492,18 +566,26 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
                         f"Report generation timed out on section "
                         f"{iteration + 1}. Please try again."
                     )
-                    await asyncio.to_thread(update_session, session_id, {
-                        "status": "error",
-                        "state": existing["state"],
-                    })
+                    await asyncio.to_thread(
+                        update_session,
+                        session_id,
+                        {
+                            "status": "error",
+                            "state": existing["state"],
+                        },
+                    )
                 return
 
             # Update session state after each section so streaming UI sees progress
             session["state"] = result
-            await asyncio.to_thread(update_session, session_id, {
-                "state": result,
-                "status": session["status"],
-            })
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "state": result,
+                    "status": session["status"],
+                },
+            )
 
             is_complete = result.get("is_complete", False)
             has_error = result.get("error")
@@ -517,44 +599,65 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
 
             if is_complete or next_agent == "END":
                 session["status"] = "complete"
-                await asyncio.to_thread(update_session, session_id, {
-                    "status": session["status"],
-                    "state": session["state"],
-                })
+                await asyncio.to_thread(
+                    update_session,
+                    session_id,
+                    {
+                        "status": session["status"],
+                        "state": session["state"],
+                    },
+                )
                 logger.info(f"Session {session_id} completed after outline approval")
                 break
             elif has_error:
                 session["status"] = "error"
-                await asyncio.to_thread(update_session, session_id, {
-                    "status": session["status"],
-                    "state": session["state"],
-                })
+                await asyncio.to_thread(
+                    update_session,
+                    session_id,
+                    {
+                        "status": session["status"],
+                        "state": session["state"],
+                    },
+                )
                 logger.error(f"Session {session_id} error after resume: {has_error}")
                 break
             # Otherwise interrupt fired again (next synthesis call) - keep resuming
         else:
             # max_iterations reached without completion
-            logger.warning(f"Session {session_id} hit max resume iterations ({max_iterations})")
+            logger.warning(
+                f"Session {session_id} hit max resume iterations ({max_iterations})"
+            )
             session["status"] = "error"
-            session["state"]["error"] = "Graph did not complete within expected iterations"
-            await asyncio.to_thread(update_session, session_id, {
-                "status": session["status"],
-                "state": session["state"],
-            })
+            session["state"]["error"] = (
+                "Graph did not complete within expected iterations"
+            )
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": session["status"],
+                    "state": session["state"],
+                },
+            )
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Graph resume error for session {session_id}: {error_msg}")
         import traceback
+
         logger.error(traceback.format_exc())
 
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = error_msg
-            await asyncio.to_thread(update_session, session_id, {
-                "status": "error",
-                "state": existing["state"],
-            })
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
 
 
 @api_router.get("/session/{session_id}/status")
@@ -580,14 +683,17 @@ async def get_session_status(session_id: str):
         "error": state.get("error"),
         "is_complete": state.get("is_complete", False),
         "has_outline": len(state.get("outline", [])) > 0,
-        "outline": state.get("outline", []) if session.get("status") == "waiting_approval" else [],
+        "outline": state.get("outline", [])
+        if session.get("status") == "waiting_approval"
+        else [],
         "trace_url": session.get("trace_url"),
         "tracing_enabled": is_tracing_enabled(),
         "updated_at": session.get("updated_at", session.get("created_at", "")),
         "versioning_report": session.get("versioning_report", None),
         "changed_section_ids": state.get("changed_section_ids", []),
         "unchanged_section_ids": [
-            s.get("section_id") for s in state.get("approved_outline", [])
+            s.get("section_id")
+            for s in state.get("approved_outline", [])
             if s.get("section_id") not in state.get("changed_section_ids", [])
         ],
     }
@@ -624,21 +730,20 @@ async def stream_session(session_id: str):
 
                 if len(updates) > last_update_count:
                     for update in updates[last_update_count:]:
-                        data = json.dumps({
-                            "type": "update",
-                            "message": update,
-                            "status": session.get("status"),
-                            "current_agent": state.get("current_agent", ""),
-                            "completed_agents": state.get("completed_agents", [])
-                        })
+                        data = json.dumps(
+                            {
+                                "type": "update",
+                                "message": update,
+                                "status": session.get("status"),
+                                "current_agent": state.get("current_agent", ""),
+                                "completed_agents": state.get("completed_agents", []),
+                            }
+                        )
                         yield f"data: {data}\n\n"
                     last_update_count = len(updates)
 
                 if session.get("status") in ["waiting_approval", "complete", "error"]:
-                    data = json.dumps({
-                        "type": "state",
-                        "session": session
-                    })
+                    data = json.dumps({"type": "state", "session": session})
                     yield f"data: {data}\n\n"
                     break
 
@@ -654,19 +759,21 @@ async def stream_session(session_id: str):
         except asyncio.CancelledError:
             # Client disconnected — exit cleanly without logging an error
             logger.debug(f"SSE client disconnected for session {session_id}")
-    
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-        }
+        },
     )
 
 
 @api_router.post("/approve-outline")
-async def approve_outline(request: ApproveOutlineRequest, background_tasks: BackgroundTasks):
+async def approve_outline(
+    request: ApproveOutlineRequest, background_tasks: BackgroundTasks
+):
     """
     Resume the graph after human-in-the-loop outline approval.
     Uses the same thread_id (session_id) to resume from the interrupt checkpoint.
@@ -679,7 +786,7 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
     if session.get("status") != "waiting_approval":
         raise HTTPException(
             status_code=400,
-            detail=f"Session is not waiting for approval. Current status: {session.get('status')}"
+            detail=f"Session is not waiting for approval. Current status: {session.get('status')}",
         )
 
     state = session["state"]
@@ -703,7 +810,7 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
     versioning_report = build_versioning_report(
         original=original_outline,
         approved=approved_outline,
-        written_sections=state.get("written_sections", [])
+        written_sections=state.get("written_sections", []),
     )
 
     # Store versioning results in state
@@ -728,13 +835,19 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
             f"[{timestamp}] ♻️ Reusing content for: {', '.join(versioning_report['unchanged_ids'])}"
         )
 
-    logger.info(f"Versioning diff for session {request.session_id}: {versioning_report['summary']}")
+    logger.info(
+        f"Versioning diff for session {request.session_id}: {versioning_report['summary']}"
+    )
 
-    await asyncio.to_thread(update_session, request.session_id, {
-        "status": "running",
-        "state": state,
-        "versioning_report": versioning_report,
-    })
+    await asyncio.to_thread(
+        update_session,
+        request.session_id,
+        {
+            "status": "running",
+            "state": state,
+            "versioning_report": versioning_report,
+        },
+    )
 
     # Resume graph from interrupt checkpoint using the SAME thread_id
     # This is the key difference from the old approach - we pass the UPDATED state
@@ -744,16 +857,14 @@ async def approve_outline(request: ApproveOutlineRequest, background_tasks: Back
     return {
         "status": "approved",
         "message": "Outline approved - resuming report generation from checkpoint",
-        "session_id": request.session_id
+        "session_id": request.session_id,
     }
 
 
 @api_router.post("/upload-pdf")
 @limiter.limit("30/minute")
 async def upload_pdf(
-    request: Request,
-    session_id: Optional[str] = Form(None),
-    file: UploadFile = File(...)
+    request: Request, session_id: str | None = Form(None), file: UploadFile = File(...)
 ):
     """Upload a PDF file for document ingestion"""
     if session_id is None:
@@ -767,7 +878,7 @@ async def upload_pdf(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024*1024)} MB"
+            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
         )
 
     # --- Magic byte check ---
@@ -777,7 +888,7 @@ async def upload_pdf(
     if not content[:5] == PDF_MAGIC:
         raise HTTPException(
             status_code=400,
-            detail="File does not appear to be a valid PDF (invalid file signature)"
+            detail="File does not appear to be a valid PDF (invalid file signature)",
         )
 
     # --- Filename sanitization ---
@@ -786,9 +897,7 @@ async def upload_pdf(
     # and truncate to 100 characters to prevent filesystem issues.
     original_name = Path(file.filename).name  # basename only, drops any path
     original_name = original_name.replace("\x00", "")  # strip null bytes
-    safe_name = "".join(
-        c for c in original_name if c.isalnum() or c in (".", "-", "_")
-    )
+    safe_name = "".join(c for c in original_name if c.isalnum() or c in (".", "-", "_"))
     if not safe_name or safe_name.startswith("."):
         safe_name = "upload.pdf"
     safe_name = safe_name[:100]
@@ -799,11 +908,8 @@ async def upload_pdf(
     try:
         with open(file_path, "wb") as buffer:
             buffer.write(content)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to save uploaded file"
-        )
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
     # If session exists, update its state
     session = await asyncio.to_thread(get_session, session_id)
@@ -818,24 +924,28 @@ async def upload_pdf(
     else:
         # No session exists yet — create a minimal tracking row so cleanup
         # can find and delete this file when the session expires.
-        await asyncio.to_thread(create_session, session_id, {
-            "id": session_id,
-            "topic": f"upload-only/{file.filename}",
-            "depth": "quick",
-            "status": "pending",
-            "state": {
-                "uploaded_pdfs": [str(file_path)],
-                "has_documents": True,
+        await asyncio.to_thread(
+            create_session,
+            session_id,
+            {
+                "id": session_id,
+                "topic": f"upload-only/{file.filename}",
+                "depth": "quick",
+                "status": "pending",
+                "state": {
+                    "uploaded_pdfs": [str(file_path)],
+                    "has_documents": True,
+                },
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        )
 
     logger.info(f"Uploaded PDF: {file.filename} -> {file_path}")
     return {
         "status": "uploaded",
         "filename": file.filename,
         "path": str(file_path),
-        "session_id": session_id
+        "session_id": session_id,
     }
 
 
@@ -849,13 +959,15 @@ async def export_pdf_endpoint(session_id: str):
     if session.get("status") != "complete":
         raise HTTPException(
             status_code=400,
-            detail=f"Report is not complete yet. Current status: {session.get('status')}"
+            detail=f"Report is not complete yet. Current status: {session.get('status')}",
         )
 
     state = session.get("state", {})
 
     if not state.get("written_sections"):
-        raise HTTPException(status_code=400, detail="No written sections found in report")
+        raise HTTPException(
+            status_code=400, detail="No written sections found in report"
+        )
 
     try:
         from export.pdf_exporter import export_report_to_pdf
@@ -880,21 +992,26 @@ async def export_pdf_endpoint(session_id: str):
             path=pdf_path,
             media_type="application/pdf",
             filename=filename,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     except ValueError as e:
         logger.error(f"PDF export validation error for session {session_id}: {str(e)}")
-        raise HTTPException(status_code=400, detail="PDF generation failed — invalid report state")
+        raise HTTPException(
+            status_code=400, detail="PDF generation failed — invalid report state"
+        )
     except Exception as e:
         logger.error(f"PDF export error for session {session_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="PDF generation failed — check server logs for details")
+        raise HTTPException(
+            status_code=500,
+            detail="PDF generation failed — check server logs for details",
+        )
 
 
 # --- Include router and middleware ---
 app.include_router(api_router)
 
-cors_origins_env = os.environ.get('CORS_ORIGINS', '').strip()
+cors_origins_env = os.environ.get("CORS_ORIGINS", "").strip()
 
 # CORS_ORIGINS must be set explicitly. validate_env_vars() at startup
 # enforces this. The fallback here is a safety net only — if somehow
@@ -909,11 +1026,10 @@ if not cors_origins_env:
 elif cors_origins_env == "*":
     cors_origins = ["*"]
     logger.warning(
-        "CORS_ORIGINS=* — all origins allowed. "
-        "Acceptable for development only."
+        "CORS_ORIGINS=* — all origins allowed. Acceptable for development only."
     )
 else:
-    cors_origins = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
+    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     logger.info(f"CORS restricted to {len(cors_origins)} origin(s): {cors_origins}")
 
 app.add_middleware(
@@ -966,6 +1082,3 @@ def _cleanup_sessions_and_files() -> None:
                 logger.warning(f"Could not delete report PDF {pdf_file}: {e}")
 
     logger.info(f"Session cleanup complete: removed {len(deleted)} expired sessions")
-
-
-

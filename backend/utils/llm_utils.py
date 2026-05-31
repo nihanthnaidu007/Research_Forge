@@ -2,9 +2,11 @@
 ResearchForge LLM utility helpers.
 Shared retry logic for all OpenAI API calls across agent files.
 """
+
 import logging
 import time
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +68,7 @@ def call_with_retry(
         ) as e:
             last_exception = e
             if attempt == max_attempts:
-                logger.error(
-                    f"{label} failed after {max_attempts} attempts: {e}"
-                )
+                logger.error(f"{label} failed after {max_attempts} attempts: {e}")
                 raise
 
             delay = min(base_delay * (2 ** (attempt - 1)), max_delay)

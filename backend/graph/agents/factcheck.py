@@ -1,18 +1,18 @@
 """
 FactCheckAgent - LLM-as-judge for verifying claims against sources
 """
-import os
+
 import json
 import logging
 from datetime import datetime
-from typing import List
-from utils.clients import get_openai_client
-from utils.llm_utils import call_with_retry
-from utils.scoring import VERDICT_SCORES
-from graph.state import ReportState
-from graph.agents.factcheck_parallel import judge_single_claim_parallel
+
 from dotenv import load_dotenv
 from langsmith import traceable
+
+from graph.agents.factcheck_parallel import judge_single_claim_parallel
+from graph.state import ReportState
+from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -22,17 +22,17 @@ MODEL = "gpt-4o"
 
 
 @traceable(name="extract-claims", run_type="llm")
-def extract_claims_from_research(research_results: List[dict]) -> List[str]:
+def extract_claims_from_research(research_results: list[dict]) -> list[str]:
     """Extract key factual claims from research snippets for fact-checking."""
     if not research_results:
         return []
-    
+
     # Combine snippets
     combined_snippets = "\n\n".join(
         f"Source ({r.get('source_domain', 'unknown')}): {r.get('snippet', '')}"
         for r in research_results[:10]
     )[:4000]
-    
+
     try:
         response = call_with_retry(
             lambda: get_openai_client().chat.completions.create(
@@ -52,13 +52,13 @@ Focus on:
 - Factual assertions that could be true or false
 
 Return ONLY a JSON object with a single key "claims" containing an array of claim strings, no markdown, no explanation:
-{"claims": ["claim 1", "claim 2", ...]}"""
+{"claims": ["claim 1", "claim 2", ...]}""",
                     },
                     {
                         "role": "user",
-                        "content": f"Extract key factual claims from these sources:\n\n{combined_snippets}"
-                    }
-                ]
+                        "content": f"Extract key factual claims from these sources:\n\n{combined_snippets}",
+                    },
+                ],
             ),
             label="factcheck extract_claims",
         )
@@ -69,7 +69,7 @@ Return ONLY a JSON object with a single key "claims" containing an array of clai
         if not isinstance(claims, list):
             claims = []
         return claims[:8]  # Limit to 8 claims
-        
+
     except Exception as e:
         logger.error(f"Claim extraction error: {str(e)}")
         # Fallback: extract simple claims from snippets
@@ -81,7 +81,7 @@ Return ONLY a JSON object with a single key "claims" containing an array of clai
         return fallback_claims[:5]
 
 
-def judge_single_claim(claim: str, sources: List[dict]) -> dict:
+def judge_single_claim(claim: str, sources: list[dict]) -> dict:
     """
     Delegates to judge_single_claim_parallel — the canonical implementation.
     This function is kept for import compatibility only. The dead sequential
@@ -103,42 +103,50 @@ def factcheck_node(state: ReportState) -> ReportState:
     """
     timestamp = datetime.now().strftime("%H:%M:%S")
     research_results = state.get("research_results", [])
-    
-    state["stream_updates"].append(f"[{timestamp}] FactCheck Agent → Extracting claims from research...")
-    
+
+    state["stream_updates"].append(
+        f"[{timestamp}] FactCheck Agent → Extracting claims from research..."
+    )
+
     try:
         # Extract claims
         claims = extract_claims_from_research(research_results)
-        state["stream_updates"].append(f"[{timestamp}] FactCheck Agent → Found {len(claims)} claims to verify")
-        
+        state["stream_updates"].append(
+            f"[{timestamp}] FactCheck Agent → Found {len(claims)} claims to verify"
+        )
+
         results = []
         for i, claim in enumerate(claims):
-            state["stream_updates"].append(f"[{timestamp}] FactCheck Agent → Verifying claim {i+1}/{len(claims)}...")
+            state["stream_updates"].append(
+                f"[{timestamp}] FactCheck Agent → Verifying claim {i + 1}/{len(claims)}..."
+            )
             result = judge_single_claim(claim, research_results)
             results.append(result)
-        
+
         state["fact_check_results"] = results
-        
+
         # Compute summary statistics
         verdicts = {"SUPPORTED": 0, "PARTIALLY_SUPPORTED": 0, "UNSUPPORTED": 0}
         for r in results:
             verdict = r.get("verdict", "PARTIALLY_SUPPORTED")
             verdicts[verdict] = verdicts.get(verdict, 0) + 1
-        
+
         # Add verdict summary to trace
         supported = sum(1 for r in results if r.get("verdict") == "SUPPORTED")
         partial = sum(1 for r in results if r.get("verdict") == "PARTIALLY_SUPPORTED")
         unsupported = sum(1 for r in results if r.get("verdict") == "UNSUPPORTED")
-        avg_confidence = round(sum(r.get("confidence", 0) for r in results) / max(len(results), 1), 2)
+        avg_confidence = round(
+            sum(r.get("confidence", 0) for r in results) / max(len(results), 1), 2
+        )
 
         state["stream_updates"].append(
             f"[{timestamp}] FactCheck Agent → Results: {supported} SUPPORTED / "
             f"{partial} PARTIAL / {unsupported} UNSUPPORTED | Avg confidence: {avg_confidence}"
         )
-        
+
         # Mark as complete
         state["completed_agents"].append("factcheck")
-        
+
         final_msg = (
             f"[{timestamp}] FactCheck Agent → Complete: {len(results)} claims assessed - "
             f"{verdicts['SUPPORTED']} SUPPORTED, {verdicts['PARTIALLY_SUPPORTED']} PARTIAL, "
@@ -146,9 +154,9 @@ def factcheck_node(state: ReportState) -> ReportState:
         )
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
-        
+
         return state
-        
+
     except Exception as e:
         error_msg = f"[{timestamp}] FactCheck Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)

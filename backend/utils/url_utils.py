@@ -2,6 +2,7 @@
 ResearchForge URL utility helpers.
 Shared functions for URL parsing and domain extraction.
 """
+
 from urllib.parse import urlparse
 
 

@@ -5,8 +5,10 @@ This ensures a single HTTP connection pool per provider across all agents.
 validate_env_vars() is called at server startup to fail fast with a clear
 message if required keys are absent.
 """
-import os
+
 import logging
+import os
+
 from openai import OpenAI
 from tavily import TavilyClient
 

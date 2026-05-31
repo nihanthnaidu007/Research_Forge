@@ -2,16 +2,17 @@
 FactCheck Parallel State and Node
 Used by the Send() API to process individual claims in parallel.
 """
-import os
-import json
+
 import asyncio
+import json
 import logging
-from typing import TypedDict, List
-from utils.clients import get_openai_client
-from utils.llm_utils import call_with_retry
-from utils.scoring import VERDICT_SCORES
+from typing import TypedDict
+
 from dotenv import load_dotenv
 from langsmith import traceable
+
+from utils.clients import get_openai_client
+from utils.llm_utils import call_with_retry
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -27,13 +28,14 @@ _factcheck_semaphore = asyncio.Semaphore(MAX_CONCURRENT_FACTCHECK_CALLS)
 
 class SingleClaimState(TypedDict):
     """State for processing a single claim in parallel"""
+
     claim: str
-    sources: List[dict]
+    sources: list[dict]
     fact_check_result: dict  # populated after judging
 
 
 @traceable(name="judge-claim-parallel", run_type="llm")
-def judge_single_claim_parallel(claim: str, sources: List[dict]) -> dict:
+def judge_single_claim_parallel(claim: str, sources: list[dict]) -> dict:
     """
     LLM judges whether a claim is supported by the retrieved sources.
     This is the same logic as the sequential version but designed for parallel execution.
@@ -66,9 +68,12 @@ Respond ONLY with JSON, no markdown, no backticks:
                 max_completion_tokens=300,
                 response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": "You are a precise fact-checker. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ]
+                    {
+                        "role": "system",
+                        "content": "You are a precise fact-checker. Return only valid JSON.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
             ),
             label="factcheck_parallel judge_single_claim",
         )
@@ -81,7 +86,7 @@ Respond ONLY with JSON, no markdown, no backticks:
             "verdict": result.get("verdict", "PARTIALLY_SUPPORTED"),
             "confidence": float(result.get("confidence", 0.5)),
             "reasoning": result.get("reasoning", "Unable to determine"),
-            "supporting_urls": result.get("supporting_urls", [])
+            "supporting_urls": result.get("supporting_urls", []),
         }
 
     except Exception as e:
@@ -91,7 +96,7 @@ Respond ONLY with JSON, no markdown, no backticks:
             "verdict": "UNSUPPORTED",
             "confidence": 0.2,
             "reasoning": f"Could not verify — API error: {str(e)[:100]}",
-            "supporting_urls": []
+            "supporting_urls": [],
         }
 
 
@@ -106,16 +111,13 @@ def factcheck_single_node(state: dict) -> dict:
 
     async def _run():
         async with _factcheck_semaphore:
-            return judge_single_claim_parallel(
-                state["claim"], state["sources"]
-            )
+            return judge_single_claim_parallel(state["claim"], state["sources"])
 
     try:
         loop = _asyncio.get_event_loop()
         if loop.is_running():
             # We are inside an async context (LangGraph async execution).
             # Use asyncio.run_coroutine_threadsafe via the running loop.
-            import concurrent.futures
             future = _asyncio.run_coroutine_threadsafe(_run(), loop)
             result = future.result(timeout=290)
         else:
@@ -123,8 +125,6 @@ def factcheck_single_node(state: dict) -> dict:
     except Exception:
         # If semaphore acquisition fails for any reason, fall back to
         # calling without the semaphore rather than failing the claim.
-        result = judge_single_claim_parallel(
-            state["claim"], state["sources"]
-        )
+        result = judge_single_claim_parallel(state["claim"], state["sources"])
 
     return {"parallel_fact_check_results": [result]}

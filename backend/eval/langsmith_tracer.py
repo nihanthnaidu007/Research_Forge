@@ -3,16 +3,18 @@ LangSmith Tracing Configuration for ResearchForge
 Provides tracing for all agent nodes and LLM calls in the multi-agent graph.
 """
 
-import os
 import logging
-from typing import Optional
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def get_langsmith_config(run_name: str, thread_id: Optional[str] = None, tags: Optional[list] = None) -> dict:
+def get_langsmith_config(
+    run_name: str, thread_id: str | None = None, tags: list | None = None
+) -> dict:
     """
     Return LangSmith RunnableConfig for graph.invoke().
     LangSmith automatically picks up tracing from environment variables
@@ -35,7 +37,7 @@ def get_langsmith_config(run_name: str, thread_id: Optional[str] = None, tags: O
         "metadata": {
             "project": os.getenv("LANGCHAIN_PROJECT", "Multi-Agent-Research"),
             "version": "1.0.0",
-        }
+        },
     }
 
     if thread_id:
@@ -47,13 +49,12 @@ def get_langsmith_config(run_name: str, thread_id: Optional[str] = None, tags: O
 
 def is_tracing_enabled() -> bool:
     """Check if LangSmith tracing is configured and enabled"""
-    return (
-        os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
-        and bool(os.getenv("LANGCHAIN_API_KEY"))
+    return os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true" and bool(
+        os.getenv("LANGCHAIN_API_KEY")
     )
 
 
-def get_trace_url(project: Optional[str] = None) -> str:
+def get_trace_url(project: str | None = None) -> str:
     """Return the LangSmith project URL. Format: /o/default/projects/p/{name}"""
     project_name = project or os.getenv("LANGCHAIN_PROJECT", "Multi-Agent-Research")
     return f"https://smith.langchain.com/o/default/projects/p/{project_name}"
@@ -65,7 +66,9 @@ def setup_tracing():
     Call this on application startup.
     """
     if is_tracing_enabled():
-        logger.info(f"LangSmith tracing ENABLED — project: {os.getenv('LANGCHAIN_PROJECT')}")
+        logger.info(
+            f"LangSmith tracing ENABLED — project: {os.getenv('LANGCHAIN_PROJECT')}"
+        )
         logger.info(f"Trace URL: {get_trace_url()}")
     else:
         logger.warning(

@@ -3,8 +3,8 @@ ResearchForge Report Versioning
 Diffs original vs edited outline to identify which sections need re-synthesis.
 Only changed sections are rewritten — unchanged sections reuse existing content.
 """
+
 import logging
-from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +14,7 @@ def normalize(text: str) -> str:
     return text.strip().lower()
 
 
-def diff_outlines(
-    original: List[dict],
-    approved: List[dict]
-) -> List[str]:
+def diff_outlines(original: list[dict], approved: list[dict]) -> list[str]:
     """
     Compare original outline (before user edits) vs approved outline (after edits).
 
@@ -33,13 +30,13 @@ def diff_outlines(
     """
     if not original:
         # No original snapshot — treat everything as changed
-        logger.warning("No original outline snapshot found — marking all sections as changed")
+        logger.warning(
+            "No original outline snapshot found — marking all sections as changed"
+        )
         return [s.get("section_id", f"sec_{i}") for i, s in enumerate(approved)]
 
     # Build lookup map from original
-    original_map: Dict[str, dict] = {
-        s.get("section_id", ""): s for s in original
-    }
+    original_map: dict[str, dict] = {s.get("section_id", ""): s for s in original}
 
     changed_ids = []
 
@@ -53,8 +50,12 @@ def diff_outlines(
             changed_ids.append(section_id)
             continue
 
-        title_changed = normalize(orig.get("title", "")) != normalize(section.get("title", ""))
-        desc_changed = normalize(orig.get("description", "")) != normalize(section.get("description", ""))
+        title_changed = normalize(orig.get("title", "")) != normalize(
+            section.get("title", "")
+        )
+        desc_changed = normalize(orig.get("description", "")) != normalize(
+            section.get("description", "")
+        )
 
         if title_changed or desc_changed:
             reasons = []
@@ -62,7 +63,9 @@ def diff_outlines(
                 reasons.append("title changed")
             if desc_changed:
                 reasons.append("description changed")
-            logger.info(f"Section {section_id} CHANGED ({', '.join(reasons)}) — marking for re-synthesis")
+            logger.info(
+                f"Section {section_id} CHANGED ({', '.join(reasons)}) — marking for re-synthesis"
+            )
             changed_ids.append(section_id)
         else:
             logger.info(f"Section {section_id} UNCHANGED — will reuse existing content")
@@ -71,9 +74,8 @@ def diff_outlines(
 
 
 def get_sections_needing_rewrite(
-    changed_ids: List[str],
-    written_sections: List[dict]
-) -> List[str]:
+    changed_ids: list[str], written_sections: list[dict]
+) -> list[str]:
     """
     From the list of changed section_ids, determine which ones actually need
     to be re-written (i.e., they have existing content that must be replaced).
@@ -92,10 +94,7 @@ def get_sections_needing_rewrite(
     return needs_rewrite
 
 
-def compute_section_diff(
-    original_section: dict,
-    approved_section: dict
-) -> dict:
+def compute_section_diff(original_section: dict, approved_section: dict) -> dict:
     """
     Detailed diff between two versions of the same section.
     Returns a dict describing what changed for UI display.
@@ -111,11 +110,15 @@ def compute_section_diff(
         "new_description": approved_section.get("description", ""),
     }
 
-    if normalize(original_section.get("title", "")) != normalize(approved_section.get("title", "")):
+    if normalize(original_section.get("title", "")) != normalize(
+        approved_section.get("title", "")
+    ):
         result["title_changed"] = True
         result["changed"] = True
 
-    if normalize(original_section.get("description", "")) != normalize(approved_section.get("description", "")):
+    if normalize(original_section.get("description", "")) != normalize(
+        approved_section.get("description", "")
+    ):
         result["description_changed"] = True
         result["changed"] = True
 
@@ -123,9 +126,7 @@ def compute_section_diff(
 
 
 def build_versioning_report(
-    original: List[dict],
-    approved: List[dict],
-    written_sections: List[dict]
+    original: list[dict], approved: list[dict], written_sections: list[dict]
 ) -> dict:
     """
     Build a complete versioning report for logging and UI display.
@@ -135,17 +136,15 @@ def build_versioning_report(
     """
     changed_ids = diff_outlines(original, approved)
     unchanged_ids = [
-        s.get("section_id", "") for s in approved
+        s.get("section_id", "")
+        for s in approved
         if s.get("section_id", "") not in changed_ids
     ]
     rewrite_ids = get_sections_needing_rewrite(changed_ids, written_sections)
 
     original_map = {s.get("section_id", ""): s for s in original}
     diff_details = [
-        compute_section_diff(
-            original_map.get(s.get("section_id", ""), {}),
-            s
-        )
+        compute_section_diff(original_map.get(s.get("section_id", ""), {}), s)
         for s in approved
     ]
 

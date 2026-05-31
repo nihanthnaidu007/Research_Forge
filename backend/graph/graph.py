@@ -3,24 +3,26 @@ ResearchForge LangGraph Graph Compilation
 Orchestrates the multi-agent workflow with interrupt() support for human-in-the-loop.
 Uses Send() API for parallel fact-checking.
 """
+
 import logging
 import os
 import threading
 from datetime import datetime
-from typing import Optional
-from langgraph.graph import StateGraph, END
-from langgraph.types import Send
+
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import Send
 from psycopg_pool import ConnectionPool
-from graph.state import ReportState
-from graph.supervisor import supervisor_node
-from graph.agents.research import research_node
+
+from graph.agents.citations import citations_node
 from graph.agents.document import document_node
 from graph.agents.factcheck import extract_claims_from_research
 from graph.agents.factcheck_parallel import factcheck_single_node
 from graph.agents.outline import outline_node
+from graph.agents.research import research_node
 from graph.agents.synthesis import synthesis_node
-from graph.agents.citations import citations_node
+from graph.state import ReportState
+from graph.supervisor import supervisor_node
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +52,13 @@ def fan_out_claims(state: dict):
     logger.info(f"Fanning out {len(claims)} claims for parallel fact-checking")
 
     return [
-        Send("factcheck_single", {
-            "claim": claim,
-            "sources": research_results,
-        })
+        Send(
+            "factcheck_single",
+            {
+                "claim": claim,
+                "sources": research_results,
+            },
+        )
         for claim in claims
     ]
 
@@ -82,10 +87,14 @@ def factcheck_merge_node(state: dict) -> dict:
 
     # Compute verdict summary
     supported = sum(1 for r in parallel_results if r.get("verdict") == "SUPPORTED")
-    partial = sum(1 for r in parallel_results if r.get("verdict") == "PARTIALLY_SUPPORTED")
+    partial = sum(
+        1 for r in parallel_results if r.get("verdict") == "PARTIALLY_SUPPORTED"
+    )
     unsupported = sum(1 for r in parallel_results if r.get("verdict") == "UNSUPPORTED")
     avg_confidence = round(
-        sum(r.get("confidence", 0) for r in parallel_results) / max(len(parallel_results), 1), 2
+        sum(r.get("confidence", 0) for r in parallel_results)
+        / max(len(parallel_results), 1),
+        2,
     )
 
     state["completed_agents"] = state.get("completed_agents", []) + ["factcheck"]
@@ -137,7 +146,9 @@ def build_graph():
     workflow.add_node("citations", citations_node)
 
     # Parallel factcheck nodes — Send() API pattern
-    workflow.add_node("factcheck_fanout", lambda state: state)  # Pass-through to trigger fan-out
+    workflow.add_node(
+        "factcheck_fanout", lambda state: state
+    )  # Pass-through to trigger fan-out
     workflow.add_node("factcheck_single", factcheck_single_node)
     workflow.add_node("factcheck_merge", factcheck_merge_node)
 
@@ -157,7 +168,7 @@ def build_graph():
             "citations": "citations",
             "END": END,
             "WAIT_FOR_HUMAN": END,
-        }
+        },
     )
 
     # Standard agents route back to supervisor
@@ -169,9 +180,7 @@ def build_graph():
 
     # Parallel factcheck fan-out edges
     workflow.add_conditional_edges(
-        "factcheck_fanout",
-        fan_out_claims,
-        ["factcheck_single", "factcheck_merge"]
+        "factcheck_fanout", fan_out_claims, ["factcheck_single", "factcheck_merge"]
     )
     workflow.add_edge("factcheck_single", "factcheck_merge")
     workflow.add_edge("factcheck_merge", "supervisor")
@@ -179,15 +188,14 @@ def build_graph():
     # interrupt_before=["synthesis"] means the graph pauses BEFORE synthesis runs
     # This gives the user a chance to review and edit the outline before writing begins
     return workflow.compile(
-        checkpointer=get_checkpointer(),
-        interrupt_before=["synthesis"]
+        checkpointer=get_checkpointer(), interrupt_before=["synthesis"]
     )
 
 
 # Module-level compiled graph instance (singleton)
 _compiled_graph = None
 _graph_lock = threading.Lock()
-_checkpointer: Optional[PostgresSaver] = None
+_checkpointer: PostgresSaver | None = None
 
 
 def get_graph():

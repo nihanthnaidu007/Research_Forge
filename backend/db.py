@@ -4,18 +4,17 @@ Replaces the in-memory sessions dict with durable storage.
 All functions are synchronous — callers run inside asyncio.to_thread or
 are synchronous background tasks.
 """
+
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from typing import Optional
-import psycopg
+from datetime import datetime, timedelta, timezone
+
 from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
-_pool: Optional[ConnectionPool] = None
+_pool: ConnectionPool | None = None
 
 
 def get_pool() -> ConnectionPool:
@@ -81,7 +80,7 @@ def create_session(session_id: str, data: dict) -> None:
         )
 
 
-def get_session(session_id: str) -> Optional[dict]:
+def get_session(session_id: str) -> dict | None:
     """Return a session dict or None if not found."""
     with get_pool().connection() as conn:
         row = conn.execute(
@@ -95,16 +94,20 @@ def get_session(session_id: str) -> Optional[dict]:
     if row is None:
         return None
     return {
-        "id":                 row[0],
-        "topic":              row[1],
-        "depth":              row[2],
-        "status":             row[3],
-        "run_name":           row[4],
-        "trace_url":          row[5],
-        "versioning_report":  row[6],
-        "state":              row[7] if isinstance(row[7], dict) else {},
-        "created_at":         row[8].isoformat() if hasattr(row[8], "isoformat") else str(row[8]),
-        "updated_at":         row[9].isoformat() if hasattr(row[9], "isoformat") else str(row[9]),
+        "id": row[0],
+        "topic": row[1],
+        "depth": row[2],
+        "status": row[3],
+        "run_name": row[4],
+        "trace_url": row[5],
+        "versioning_report": row[6],
+        "state": row[7] if isinstance(row[7], dict) else {},
+        "created_at": row[8].isoformat()
+        if hasattr(row[8], "isoformat")
+        else str(row[8]),
+        "updated_at": row[9].isoformat()
+        if hasattr(row[9], "isoformat")
+        else str(row[9]),
     }
 
 
@@ -159,10 +162,12 @@ def cleanup_old_sessions(ttl_seconds: int) -> list:
     for row in rows:
         session_id = row[0]
         state = row[1] if isinstance(row[1], dict) else {}
-        deleted.append({
-            "id":            session_id,
-            "uploaded_pdfs": state.get("uploaded_pdfs", []),
-        })
+        deleted.append(
+            {
+                "id": session_id,
+                "uploaded_pdfs": state.get("uploaded_pdfs", []),
+            }
+        )
         logger.info(f"Cleaned up expired session: {session_id}")
 
     return deleted
