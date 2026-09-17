@@ -153,6 +153,18 @@ class ReportState(TypedDict):
     # index directly (W2 old-checkpoint precedent).
     chat_messages: list[dict]
 
+    # Deep-research loop (W4): rounds of gap-driven re-research after outline
+    # approval. research_rounds counts completed gap trips; coverage_gaps
+    # carries the deterministic gap descriptions that scoped the latest
+    # round's queries. Absent on pre-W4 sessions — readers must .get() with
+    # an honest default (0 / empty), never index directly.
+    research_rounds: int
+    coverage_gaps: list[str]
+
+    # Mid-run steering (W4): merged free-text focus from redirect commands.
+    # Synthesis folds it into section prompts; empty when never steered.
+    redirect_focus: str
+
     # Orchestration
     current_agent: str  # name of currently running agent
     completed_agents: list[str]  # agents that have finished

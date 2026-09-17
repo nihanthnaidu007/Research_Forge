@@ -98,6 +98,7 @@ def write_section(
     fact_check_results: list[dict],
     document_summary: str = "",
     is_last: bool = False,
+    steering_focus: str = "",
 ) -> dict:
     """
     Write a single report section using LLM, grounded in sources.
@@ -122,6 +123,14 @@ def write_section(
         else ""
     )
 
+    # Mid-run steering (W4): merged redirect focus, when present, tells the
+    # writer what the user wants emphasized in this section's rewrite.
+    focus_context = (
+        f"\nUser steering focus (emphasize this): {steering_focus[:400]}"
+        if steering_focus
+        else ""
+    )
+
     # Relevant fact-checks
     relevant_facts = "\n".join(
         f"- {fc.get('claim', '')[:150]} ({fc.get('verdict', 'UNKNOWN')})"
@@ -142,6 +151,7 @@ Section Focus: {section.get("description", "Cover key findings")}
 Available Sources:
 {source_context}
 {doc_context}
+{focus_context}
 
 Verified Facts:
 {relevant_facts}
@@ -247,7 +257,12 @@ def synthesis_node(state: ReportState) -> ReportState:
     try:
         # Write the section
         written_section = write_section(
-            section, research_results, fact_check_results, document_summary, is_last
+            section,
+            research_results,
+            fact_check_results,
+            document_summary,
+            is_last,
+            steering_focus=state.get("redirect_focus", ""),
         )
 
         # Compute confidence for this section
