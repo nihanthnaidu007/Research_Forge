@@ -49,6 +49,15 @@ const initialState = {
   chatLoading: false,
   chatError: null,
   chatSessionExpired: false,
+  // Deep-research loop (W4): round bookkeeping surfaced from the status
+  // endpoint, plus mid-run steering state. ACK feedback is poll-bounded —
+  // the store never pretends a command took effect before a poll confirms
+  // it (or, for redirect, before the next section boundary).
+  researchRounds: 0,
+  coverageGaps: [],
+  steerInFlight: null,
+  steerAck: null,
+  steerError: null,
 };
 
 export const useStore = create((set, get) => ({
@@ -252,6 +261,8 @@ export const useStore = create((set, get) => ({
             sectionsWritten: data.sections_written || 0,
             totalSections: data.total_sections || 0,
           },
+          researchRounds: data.research_rounds || 0,
+          coverageGaps: data.coverage_gaps || [],
         };
 
         if (data.status === 'waiting_approval' &&
@@ -280,6 +291,23 @@ export const useStore = create((set, get) => ({
           _polling.intervalId = null;
           set({ error: data.error || 'An error occurred' });
           return;
+        }
+
+        // Poll-bounded steering ACKs: pause/resume banners disappear once
+        // a poll observes their outcome; redirect stays as the current
+        // steering intent until the run ends. Latency stays honest — the
+        // banner never claims the command applied before this.
+        const ack = get().steerAck;
+        if (ack && ack.command !== 'redirect') {
+          if (
+            (ack.command === 'pause' && data.status === 'paused') ||
+            (ack.command === 'resume' && data.status === 'running')
+          ) {
+            set({ steerAck: null });
+          }
+        }
+        if (data.status === 'complete' || data.status === 'error') {
+          set({ steerAck: null, steerError: null });
         }
 
         // Choose next poll delay based on current phase
@@ -535,6 +563,77 @@ export const useStore = create((set, get) => ({
   },
 
   clearChatError: () => set({ chatError: null, chatSessionExpired: false }),
+
+  // Mid-run steering (W4). POSTs a pause/resume/redirect command to the
+  // ownership-gated endpoint; the backend queues it under the per-session
+  // lock and the run driver consumes it at the next step boundary. The
+  // 200 is an ACK, not an effect — components state the 2-5s poll cadence
+  // honestly instead of implying an instant stop.
+  sendSteerCommand: async (command, focus = null) => {
+    const { sessionId, sessionToken } = get();
+    if (!sessionId || !sessionToken) {
+      set({ steerError: 'No active session to steer' });
+      return false;
+    }
+    if (!['pause', 'resume', 'redirect'].includes(command)) {
+      set({ steerError: 'Unknown steering command' });
+      return false;
+    }
+    if (command === 'redirect' && !(focus || '').trim()) {
+      set({ steerError: 'Add focus text before redirecting' });
+      return false;
+    }
+
+    set({ steerInFlight: command, steerError: null, steerAck: null });
+
+    try {
+      const response = await fetch(apiUrl(`/api/session/${sessionId}/steer`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders(sessionToken),
+        },
+        body: JSON.stringify(
+          command === 'redirect'
+            ? { command, focus: focus.trim() }
+            : { command }
+        ),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        const detail = errData.detail;
+        const message =
+          typeof detail === 'string'
+            ? detail
+            : detail?.message || `Steer command failed (${response.status})`;
+        if (response.status === 429 && detail?.retry_after_seconds) {
+          throw new Error(
+            `${message} Retry in about ${detail.retry_after_seconds}s.`
+          );
+        }
+        throw new Error(message);
+      }
+
+      if (command === 'resume') {
+        // Optimistic flip: the backend leaves the session paused until the
+        // run driver consumes the resume; polling confirms within one
+        // cadence, and the poll ACK-clearing above expects this transition.
+        set({ steerAck: { command, at: Date.now() }, status: 'running' });
+      } else {
+        set({ steerAck: { command, at: Date.now() } });
+      }
+      return true;
+    } catch (err) {
+      console.error('Steer command error:', err);
+      set({ steerError: err.message || 'Steer command failed' });
+      return false;
+    } finally {
+      set({ steerInFlight: null });
+    }
+  },
+
+  clearSteerFeedback: () => set({ steerAck: null, steerError: null }),
 
   resetReport: () => {
     if (_polling.intervalId) {

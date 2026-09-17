@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { 
   Search, FileText, CheckCircle, List, PenTool, Quote, 
-  Circle, Loader2, CheckCircle2, AlertCircle 
+  Circle, Loader2, CheckCircle2, AlertCircle, PauseCircle 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -24,7 +24,7 @@ const AGENTS = [
   { key: 'citations', label: 'Citations', description: 'Formatting refs' },
 ];
 
-function getAgentStatus(agentKey, currentAgent, completedAgents, hasDocuments) {
+function getAgentStatus(agentKey, currentAgent, completedAgents, hasDocuments, paused) {
   if (agentKey === 'document' && !hasDocuments) {
     return 'skipped';
   }
@@ -32,7 +32,7 @@ function getAgentStatus(agentKey, currentAgent, completedAgents, hasDocuments) {
     return 'complete';
   }
   if (currentAgent === agentKey) {
-    return 'running';
+    return paused ? 'paused' : 'running';
   }
   return 'pending';
 }
@@ -52,6 +52,12 @@ function AgentStatusItem({ agent, status }) {
       color: 'text-amber-400',
       bg: 'bg-amber-500/10',
       border: 'border-amber-500/30',
+    },
+    paused: {
+      icon: PauseCircle,
+      color: 'text-amber-300',
+      bg: 'bg-amber-500/5',
+      border: 'border-amber-500/20',
     },
     complete: {
       icon: CheckCircle2,
@@ -96,7 +102,11 @@ function AgentStatusItem({ agent, status }) {
           {agent.label}
         </p>
         <p className="text-xs text-zinc-600 truncate">
-          {status === 'running' ? 'Processing...' : agent.description}
+          {status === 'running'
+            ? 'Processing...'
+            : status === 'paused'
+              ? 'Paused — waiting to resume'
+              : agent.description}
         </p>
       </div>
       <StatusIcon 
@@ -111,14 +121,20 @@ function AgentStatusItem({ agent, status }) {
   );
 }
 
-export function AgentStatusPanel({ currentAgent, completedAgents, hasDocuments }) {
+export function AgentStatusPanel({ currentAgent, completedAgents, hasDocuments, paused = false }) {
   return (
     <div className="space-y-2">
       <h3 className="text-xs font-mono uppercase tracking-wider text-zinc-500 px-1 mb-3">
         Agent Pipeline
       </h3>
       {AGENTS.map((agent, index) => {
-        const status = getAgentStatus(agent.key, currentAgent, completedAgents, hasDocuments);
+        const status = getAgentStatus(
+          agent.key,
+          currentAgent,
+          completedAgents,
+          hasDocuments,
+          paused
+        );
         return (
           <motion.div
             key={agent.key}

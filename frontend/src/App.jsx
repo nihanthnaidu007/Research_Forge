@@ -35,6 +35,12 @@ function App() {
     setOutlineEdits,
     saveOutline,
     exportReport,
+    // W4 mid-run steering + deep-research round visibility
+    researchRounds,
+    steerInFlight,
+    steerAck,
+    steerError,
+    sendSteerCommand,
     // Actions
     startReport,
     resetReport,
@@ -72,6 +78,7 @@ function App() {
           agentStats={agentStats}
           overallConfidence={overallConfidence}
           hasDocuments={hasDocuments}
+          paused={status === 'paused'}
         />
       </motion.aside>
       
@@ -104,6 +111,11 @@ function App() {
           onEditsChange={setOutlineEdits}
           onSaveOutline={saveOutline}
           onExport={exportReport}
+          onSteer={sendSteerCommand}
+          steerInFlight={steerInFlight}
+          steerAck={steerAck}
+          steerError={steerError}
+          researchRounds={researchRounds}
         />
       </motion.main>
       

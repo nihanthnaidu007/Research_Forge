@@ -5,6 +5,11 @@ import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
 import ChatPanel from './ChatPanel';
+import {
+  SteeringControls,
+  SteerFeedback,
+  PausedState,
+} from './SteeringControls';
 
 function WelcomeState() {
   return (
@@ -43,7 +48,7 @@ function WelcomeState() {
   );
 }
 
-function ProcessingState({ topic, streamUpdates }) {
+function ProcessingState({ topic, streamUpdates, researchRounds }) {
   const latestUpdate = streamUpdates && streamUpdates.length > 0
     ? streamUpdates[streamUpdates.length - 1]
     : 'Initializing agents...';
@@ -58,6 +63,14 @@ function ProcessingState({ topic, streamUpdates }) {
       <div className="relative mb-6">
         <Loader2 className="w-16 h-16 text-cyan-500 animate-spin" strokeWidth={1} />
       </div>
+      {typeof researchRounds === 'number' && researchRounds > 0 && (
+        <span
+          data-testid="research-round-badge"
+          className="text-xs font-mono text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-sm px-2 py-1 mb-3"
+        >
+          Deep-research round {researchRounds}
+        </span>
+      )}
       <h2 className="text-xl font-display font-semibold text-zinc-200 mb-2">
         Researching: {topic}
       </h2>
@@ -196,7 +209,13 @@ export function MainPanel({
   outlineEdits,
   onEditsChange,
   onSaveOutline,
-  onExport
+  onExport,
+  // W4 mid-run steering
+  onSteer,
+  steerInFlight,
+  steerAck,
+  steerError,
+  researchRounds,
 }) {
   const renderContent = () => {
     // Error state — check first so errors always show
@@ -226,7 +245,40 @@ export function MainPanel({
     
     // Running (before outline or after approval)
     if (status === 'running') {
-      return <ProcessingState topic={topic} streamUpdates={streamUpdates} />;
+      return (
+        <div className="h-full flex flex-col items-center justify-center">
+          <ProcessingState
+            topic={topic}
+            streamUpdates={streamUpdates}
+            researchRounds={researchRounds}
+          />
+          {outlineApproved && (
+            <>
+              <SteerFeedback steerAck={steerAck} steerError={steerError} />
+              <SteeringControls
+                onSteer={onSteer}
+                steerInFlight={steerInFlight}
+              />
+            </>
+          )}
+        </div>
+      );
+    }
+
+    // Paused (W4 mid-run steering): parked card with resume + redirect.
+    if (status === 'paused') {
+      return (
+        <div className="h-full flex flex-col items-center justify-center">
+          <PausedState
+            topic={topic}
+            streamUpdates={streamUpdates}
+            onSteer={onSteer}
+            steerInFlight={steerInFlight}
+            researchRounds={researchRounds}
+          />
+          <SteerFeedback steerAck={steerAck} steerError={steerError} />
+        </div>
+      );
     }
     
     // Complete state
