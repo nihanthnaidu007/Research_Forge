@@ -12,6 +12,8 @@ import os
 from openai import OpenAI
 from tavily import TavilyClient
 
+from utils import token_budget
+
 logger = logging.getLogger(__name__)
 
 _openai_client: OpenAI | None = None
@@ -44,6 +46,23 @@ def get_tavily_client() -> TavilyClient:
         _tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
         logger.info("Tavily client initialized")
     return _tavily_client
+
+
+def chat_completion_with_usage(**kwargs):
+    """
+    Create a chat completion and record token usage against the active run's
+    token budget (see utils/token_budget.py).
+
+    Drop-in replacement for get_openai_client().chat.completions.create():
+    same arguments, same response, plus per-run usage accounting. Usage is
+    only recorded when a run context is active (set by the graph runners).
+    """
+    response = get_openai_client().chat.completions.create(**kwargs)
+    usage = getattr(response, "usage", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens:
+        token_budget.record_usage_for_current_session(int(total_tokens))
+    return response
 
 
 def validate_env_vars() -> None:

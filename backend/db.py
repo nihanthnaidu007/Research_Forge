@@ -54,17 +54,26 @@ def setup_db() -> None:
                 updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Session ownership (auth): hash of the token issued in the run
+        # response. ADD COLUMN IF NOT EXISTS keeps existing deployments
+        # working without a separate migration step.
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS session_token_hash TEXT"
+        )
     logger.info("Database schema verified")
 
 
-def create_session(session_id: str, data: dict) -> None:
-    """Insert a new session row."""
+def create_session(
+    session_id: str, data: dict, session_token_hash: str | None = None
+) -> None:
+    """Insert a new session row. session_token_hash enables ownership checks."""
     with get_pool().connection() as conn:
         conn.execute(
             """
             INSERT INTO sessions
-                (id, topic, depth, status, run_name, trace_url, state, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, topic, depth, status, run_name, trace_url, state,
+                 created_at, updated_at, session_token_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 session_id,
@@ -76,12 +85,19 @@ def create_session(session_id: str, data: dict) -> None:
                 json.dumps(data.get("state", {})),
                 data.get("created_at", datetime.now(timezone.utc).isoformat()),
                 datetime.now(timezone.utc).isoformat(),
+                session_token_hash,
             ),
         )
 
 
 def get_session(session_id: str) -> dict | None:
-    """Return a session dict or None if not found."""
+    """
+    Return a session dict or None if not found.
+
+    Deliberately does NOT select session_token_hash: the result is returned
+    to clients by GET /api/session/{id}. Use get_session_token_hash() for
+    the ownership check.
+    """
     with get_pool().connection() as conn:
         row = conn.execute(
             """
@@ -109,6 +125,16 @@ def get_session(session_id: str) -> dict | None:
         if hasattr(row[9], "isoformat")
         else str(row[9]),
     }
+
+
+def get_session_token_hash(session_id: str) -> str | None:
+    """Return the stored session-token hash, or None if the session has none."""
+    with get_pool().connection() as conn:
+        row = conn.execute(
+            "SELECT session_token_hash FROM sessions WHERE id = %s",
+            (session_id,),
+        ).fetchone()
+    return row[0] if row else None
 
 
 def update_session(session_id: str, updates: dict) -> None:
