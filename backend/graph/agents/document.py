@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.state import ReportState
-from utils.clients import get_openai_client
+from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
 from utils.validation import validate_url
 
@@ -141,7 +141,7 @@ def summarize_documents(chunks: list[dict], topic: str) -> str:
 
     try:
         response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
+            lambda: chat_completion_with_usage(
                 model=MODEL,
                 temperature=0.3,
                 max_completion_tokens=400,

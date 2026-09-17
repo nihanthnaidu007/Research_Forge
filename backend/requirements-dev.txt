@@ -1,0 +1,4 @@
+# Development-only dependencies (tests, lint).
+# Runtime deps live in requirements.txt; pinned installs use requirements.lock.
+pytest>=8.0.0
+ruff>=0.6.0

@@ -11,7 +11,7 @@ from typing import TypedDict
 from dotenv import load_dotenv
 from langsmith import traceable
 
-from utils.clients import get_openai_client
+from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
 
 load_dotenv()
@@ -62,7 +62,7 @@ Respond ONLY with JSON, no markdown, no backticks:
 
     try:
         response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
+            lambda: chat_completion_with_usage(
                 model=MODEL,
                 temperature=0.1,
                 max_completion_tokens=300,

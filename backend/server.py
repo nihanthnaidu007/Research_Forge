@@ -17,10 +17,13 @@ from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     Form,
+    Header,
     HTTPException,
+    Query,
     Request,
     UploadFile,
 )
@@ -65,6 +68,15 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 # Import graph components
+from auth import (
+    SESSION_TOKEN_HEADER,
+    enforce_session_ownership,
+    extract_session_token,
+    generate_session_token,
+    hash_session_token,
+    require_api_key,
+    require_session_ownership,
+)
 from db import cleanup_old_sessions as db_cleanup_sessions
 from db import create_session, get_session, setup_db, update_session
 from eval.langsmith_tracer import (
@@ -74,6 +86,7 @@ from eval.langsmith_tracer import (
 )
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
+from utils import token_budget
 from utils.clients import validate_env_vars
 from utils.validation import validate_url
 
@@ -207,10 +220,20 @@ class ReportSession(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+async def require_session_ownership_body(
+    request: ApproveOutlineRequest,
+    x_session_token: str | None = Header(default=None, alias=SESSION_TOKEN_HEADER),
+    session_token: str | None = Query(default=None),
+) -> None:
+    """Ownership check for routes whose session_id arrives in the JSON body."""
+    provided = extract_session_token(x_session_token, session_token)
+    await enforce_session_ownership(request.session_id, provided)
+
+
 # --- API Endpoints ---
 
 
-@api_router.get("/")
+@api_router.get("/", dependencies=[Depends(require_api_key)])
 async def root():
     return {"message": "ResearchForge API", "version": "1.0.0"}
 
@@ -268,7 +291,7 @@ async def health_check():
     return health
 
 
-@api_router.post("/run")
+@api_router.post("/run", dependencies=[Depends(require_api_key)])
 @limiter.limit("10/minute")
 async def run_report(
     request: Request, run_request: RunReportRequest, background_tasks: BackgroundTasks
@@ -299,6 +322,7 @@ async def run_report(
             logger.warning(f"Rejected URL '{url[:80]}': {reason}")
 
     session_id = str(uuid.uuid4())
+    session_token = generate_session_token()
 
     # Build LangSmith run name from topic (truncated, URL-safe)
     safe_topic = topic[:40].replace(" ", "-").lower()
@@ -327,27 +351,35 @@ async def run_report(
         input_urls=valid_urls,
     )
 
-    # Store session
-    await asyncio.to_thread(
-        create_session,
-        session_id,
-        {
-            "id": session_id,
-            "topic": topic,
-            "depth": run_request.depth,
-            "status": "running",
-            "run_name": run_name,
-            "trace_url": get_trace_url() if is_tracing_enabled() else None,
-            "state": initial_state,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    # Global cost ceiling: refuse to queue new graph executions at capacity.
+    await acquire_run_slot()
+    try:
+        # Store session (persisting only the hash of the ownership token)
+        await asyncio.to_thread(
+            create_session,
+            session_id,
+            {
+                "id": session_id,
+                "topic": topic,
+                "depth": run_request.depth,
+                "status": "running",
+                "run_name": run_name,
+                "trace_url": get_trace_url() if is_tracing_enabled() else None,
+                "state": initial_state,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            hash_session_token(session_token),
+        )
+    except Exception:
+        release_run_slot()
+        raise
 
     # Run graph in background
     background_tasks.add_task(run_graph_async, session_id)
 
     return {
         "session_id": session_id,
+        "session_token": session_token,
         "status": "running",
         "message": f"Started research report generation for: {run_request.topic}",
     }
@@ -364,6 +396,8 @@ async def run_graph_async(session_id: str):
         logger.warning(f"Session {session_id} not found in run_graph_async")
         return
 
+    token_budget.ensure_budget(session_id)
+    session_ctx = token_budget.set_session_context(session_id)
     try:
         graph = get_graph()
         state = session["state"]
@@ -464,16 +498,14 @@ async def run_graph_async(session_id: str):
             session["status"] = "complete"
             await asyncio.to_thread(update_session, session_id, {"status": "complete"})
 
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Graph execution error for session {session_id}: {error_msg}")
-        import traceback
-
-        logger.error(traceback.format_exc())
-
+    except token_budget.TokenBudgetExceeded:
+        logger.error(f"Session {session_id}: per-run token budget exhausted")
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
-            existing["state"]["error"] = error_msg
+            existing["state"]["error"] = (
+                "Report generation stopped: the token budget for this run "
+                "was exhausted. Start a new run or raise RUN_TOKEN_BUDGET."
+            )
             await asyncio.to_thread(
                 update_session,
                 session_id,
@@ -482,6 +514,33 @@ async def run_graph_async(session_id: str):
                     "state": existing["state"],
                 },
             )
+    except Exception as e:
+        # Client-visible state gets a generic message plus a short reference;
+        # raw exception text stays in the server log only.
+        error_ref = uuid.uuid4().hex[:8]
+        logger.error(f"Graph execution error for session {session_id} [ref {error_ref}]: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = (
+                "Report generation failed due to an internal error. "
+                f"Reference: {error_ref}. Please retry."
+            )
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
+    finally:
+        token_budget.reset_session_context(session_ctx)
+        token_budget.release_budget(session_id)
+        release_run_slot()
 
 
 async def resume_graph_after_approval(session_id: str, updated_state: dict):
@@ -500,6 +559,8 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
         logger.warning(f"Session {session_id} not found in resume_graph_after_approval")
         return
 
+    token_budget.ensure_budget(session_id)
+    session_ctx = token_budget.set_session_context(session_id)
     try:
         graph = get_graph()
 
@@ -640,16 +701,14 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
                 },
             )
 
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Graph resume error for session {session_id}: {error_msg}")
-        import traceback
-
-        logger.error(traceback.format_exc())
-
+    except token_budget.TokenBudgetExceeded:
+        logger.error(f"Session {session_id}: per-run token budget exhausted during resume")
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
-            existing["state"]["error"] = error_msg
+            existing["state"]["error"] = (
+                "Report generation stopped: the token budget for this run "
+                "was exhausted. Start a new run or raise RUN_TOKEN_BUDGET."
+            )
             await asyncio.to_thread(
                 update_session,
                 session_id,
@@ -658,9 +717,36 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
                     "state": existing["state"],
                 },
             )
+    except Exception as e:
+        # Client-visible state gets a generic message plus a short reference;
+        # raw exception text stays in the server log only.
+        error_ref = uuid.uuid4().hex[:8]
+        logger.error(f"Graph resume error for session {session_id} [ref {error_ref}]: {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = (
+                "Report generation failed due to an internal error. "
+                f"Reference: {error_ref}. Please retry."
+            )
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
+    finally:
+        token_budget.reset_session_context(session_ctx)
+        token_budget.release_budget(session_id)
+        release_run_slot()
 
 
-@api_router.get("/session/{session_id}/status")
+@api_router.get("/session/{session_id}/status", dependencies=[Depends(require_api_key)])
 async def get_session_status(session_id: str):
     """Lightweight status check - returns only orchestration fields, not full state"""
     session = await asyncio.to_thread(get_session, session_id)
@@ -699,7 +785,7 @@ async def get_session_status(session_id: str):
     }
 
 
-@api_router.get("/session/{session_id}")
+@api_router.get("/session/{session_id}", dependencies=[Depends(require_api_key)])
 async def get_session_endpoint(session_id: str):
     """Get current session state"""
     session = await asyncio.to_thread(get_session, session_id)
@@ -709,7 +795,10 @@ async def get_session_endpoint(session_id: str):
     return session
 
 
-@api_router.get("/session/{session_id}/stream")
+@api_router.get(
+    "/session/{session_id}/stream",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
 async def stream_session(session_id: str):
     """Stream session updates via SSE"""
     session = await asyncio.to_thread(get_session, session_id)
@@ -770,7 +859,10 @@ async def stream_session(session_id: str):
     )
 
 
-@api_router.post("/approve-outline")
+@api_router.post(
+    "/approve-outline",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership_body)],
+)
 async def approve_outline(
     request: ApproveOutlineRequest, background_tasks: BackgroundTasks
 ):
@@ -839,20 +931,27 @@ async def approve_outline(
         f"Versioning diff for session {request.session_id}: {versioning_report['summary']}"
     )
 
-    await asyncio.to_thread(
-        update_session,
-        request.session_id,
-        {
-            "status": "running",
-            "state": state,
-            "versioning_report": versioning_report,
-        },
-    )
+    await acquire_run_slot()
+    try:
+        await asyncio.to_thread(
+            update_session,
+            request.session_id,
+            {
+                "status": "running",
+                "state": state,
+                "versioning_report": versioning_report,
+            },
+        )
 
-    # Resume graph from interrupt checkpoint using the SAME thread_id
-    # This is the key difference from the old approach - we pass the UPDATED state
-    # and the same config so MemorySaver knows which checkpoint to resume
-    background_tasks.add_task(resume_graph_after_approval, request.session_id, state)
+        # Resume graph from interrupt checkpoint using the SAME thread_id
+        # This is the key difference from the old approach - we pass the UPDATED state
+        # and the same config so MemorySaver knows which checkpoint to resume
+        background_tasks.add_task(
+            resume_graph_after_approval, request.session_id, state
+        )
+    except Exception:
+        release_run_slot()
+        raise
 
     return {
         "status": "approved",
@@ -861,7 +960,7 @@ async def approve_outline(
     }
 
 
-@api_router.post("/upload-pdf")
+@api_router.post("/upload-pdf", dependencies=[Depends(require_api_key)])
 @limiter.limit("30/minute")
 async def upload_pdf(
     request: Request, session_id: str | None = Form(None), file: UploadFile = File(...)
@@ -951,7 +1050,10 @@ async def upload_pdf(
     }
 
 
-@api_router.post("/export-pdf")
+@api_router.post(
+    "/export-pdf",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
 async def export_pdf_endpoint(session_id: str):
     """Export completed report as a styled PDF and return it as a file download"""
     session = await asyncio.to_thread(get_session, session_id)
@@ -1053,6 +1155,58 @@ GRAPH_EXECUTION_TIMEOUT = 600.0  # 10 minutes
 # Each iteration writes one section. 5 minutes is generous for a single
 # GPT-4o call but accounts for rate limit retries.
 GRAPH_RESUME_ITERATION_TIMEOUT = 300.0  # 5 minutes per section
+
+
+# --- Cost controls ---
+
+
+def _parse_positive_int_env(name: str, default: int) -> int:
+    """Parse a positive-integer env var; fall back to default when unset/invalid."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"Invalid {name}={raw!r} — using default {default}")
+        return default
+    if value < 1:
+        logger.warning(
+            f"Invalid {name}={raw!r} (must be >= 1) — using default {default}"
+        )
+        return default
+    return value
+
+
+MAX_CONCURRENT_RUNS = _parse_positive_int_env("MAX_CONCURRENT_RUNS", 3)
+
+# Global cap on concurrent graph executions — initial runs AND resume
+# executions after outline approval both hold a slot for their duration.
+# At capacity, new requests get 429 with retry guidance instead of queueing.
+_graph_run_slots = asyncio.Semaphore(MAX_CONCURRENT_RUNS)
+_RUN_SLOT_RETRY_AFTER_SECONDS = 30
+
+
+async def acquire_run_slot() -> None:
+    """Take a graph-execution slot, or reject the request with 429 + retry guidance."""
+    if _graph_run_slots.locked():
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": (
+                    "The server is at its concurrent report-generation limit. "
+                    "Please retry shortly."
+                ),
+                "retry_after_seconds": _RUN_SLOT_RETRY_AFTER_SECONDS,
+            },
+            headers={"Retry-After": str(_RUN_SLOT_RETRY_AFTER_SECONDS)},
+        )
+    await _graph_run_slots.acquire()
+
+
+def release_run_slot() -> None:
+    """Release a graph-execution slot. Only call after a successful acquire_run_slot."""
+    _graph_run_slots.release()
 
 
 def _cleanup_sessions_and_files() -> None:

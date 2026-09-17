@@ -1,0 +1,119 @@
+"""
+Per-run token budget accounting.
+
+A registry mapping session_id -> RunTokenBudget plus a context var so LLM
+call sites can attribute token usage to the run that triggered them (the
+graph executes in worker threads via asyncio.to_thread, which copies the
+caller's context, so a value set in the async task is visible inside it).
+
+The budget is a cost ceiling, not a billing meter: when a run records more
+tokens than RUN_TOKEN_BUDGET allows, record() raises TokenBudgetExceeded so
+the graph execution fails fast with a sanitized client-facing error instead
+of silently burning credits.
+
+The budget applies per graph-execution phase (initial run, post-approval
+resume): each phase enforces the full budget, and the registry entry is
+released when the phase ends.
+"""
+
+import os
+import threading
+from contextvars import ContextVar, Token
+
+_budgets: dict[str, "RunTokenBudget"] = {}
+_registry_lock = threading.Lock()
+
+# Tracks which session the current call stack serves, so a shared OpenAI
+# client can attribute usage across concurrent runs.
+_current_session_id: ContextVar[str | None] = ContextVar(
+    "current_session_id", default=None
+)
+
+
+class TokenBudgetExceeded(RuntimeError):
+    """Raised when a run records more tokens than its budget allows."""
+
+
+class RunTokenBudget:
+    """Thread-safe token tally for a single run, with a hard ceiling."""
+
+    def __init__(self, max_tokens: int | None):
+        self.max_tokens = max_tokens
+        self.used_tokens = 0
+        self._lock = threading.Lock()
+
+    def record(self, tokens: int) -> int:
+        """
+        Add tokens to the tally.
+
+        Raises TokenBudgetExceeded when the ceiling is crossed, so the
+        calling LLM call site aborts before spending further tokens.
+        """
+        if tokens <= 0:
+            return self.used_tokens
+        with self._lock:
+            self.used_tokens += tokens
+            if self.max_tokens is not None and self.used_tokens > self.max_tokens:
+                raise TokenBudgetExceeded(
+                    f"per-run token budget exhausted: "
+                    f"{self.used_tokens} > {self.max_tokens} tokens"
+                )
+            return self.used_tokens
+
+
+def _max_tokens_from_env() -> int | None:
+    """Parse RUN_TOKEN_BUDGET; empty, zero, or invalid means unlimited."""
+    raw = os.getenv("RUN_TOKEN_BUDGET", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def ensure_budget(session_id: str) -> RunTokenBudget:
+    """Return the session's budget, creating one from RUN_TOKEN_BUDGET if absent."""
+    with _registry_lock:
+        budget = _budgets.get(session_id)
+        if budget is None:
+            budget = RunTokenBudget(_max_tokens_from_env())
+            _budgets[session_id] = budget
+        return budget
+
+
+def release_budget(session_id: str) -> None:
+    """Drop the session's budget. Called when a graph-execution phase ends."""
+    with _registry_lock:
+        _budgets.pop(session_id, None)
+
+
+def get_budget(session_id: str) -> RunTokenBudget | None:
+    with _registry_lock:
+        return _budgets.get(session_id)
+
+
+def set_session_context(session_id: str) -> Token:
+    """Bind LLM calls on this call stack (and its to_thread children) to a session."""
+    return _current_session_id.set(session_id)
+
+
+def reset_session_context(token: Token) -> None:
+    _current_session_id.reset(token)
+
+
+def record_usage_for_current_session(tokens: int) -> None:
+    """
+    Attribute tokens to the run active in the current context.
+
+    No-op when no session context is set or the session has no registered
+    budget; raises TokenBudgetExceeded when the active budget is exceeded.
+    """
+    session_id = _current_session_id.get()
+    if session_id is None:
+        return
+    with _registry_lock:
+        budget = _budgets.get(session_id)
+    if budget is not None:
+        budget.record(tokens)

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.state import ReportState
-from utils.clients import get_openai_client
+from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
 from utils.scoring import VERDICT_SCORES
 
@@ -150,7 +150,7 @@ Instructions: Write 180-250 words. Cite sources inline as [source: url]. {ending
 
     try:
         response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
+            lambda: chat_completion_with_usage(
                 model=MODEL,
                 temperature=0.5,
                 max_completion_tokens=600,

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.state import ReportState
-from utils.clients import get_openai_client
+from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
 
 load_dotenv()
@@ -94,7 +94,7 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
 
     try:
         response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
+            lambda: chat_completion_with_usage(
                 model=MODEL,
                 temperature=0.4,
                 max_completion_tokens=1000,

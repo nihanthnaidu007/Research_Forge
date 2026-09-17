@@ -11,7 +11,7 @@ from langsmith import traceable
 
 from graph.agents.factcheck_parallel import judge_single_claim_parallel
 from graph.state import ReportState
-from utils.clients import get_openai_client
+from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
 
 load_dotenv()
@@ -35,7 +35,7 @@ def extract_claims_from_research(research_results: list[dict]) -> list[str]:
 
     try:
         response = call_with_retry(
-            lambda: get_openai_client().chat.completions.create(
+            lambda: chat_completion_with_usage(
                 model=MODEL,
                 temperature=0.2,
                 max_completion_tokens=800,
