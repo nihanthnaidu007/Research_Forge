@@ -1,16 +1,22 @@
 # Vercel Deployment Note
 
-Before deploying to Vercel, update the `destination` URL in `vercel.json`
-to match your Railway backend URL. The URL format is:
+The frontend resolves its backend from the `VITE_API_BASE_URL` environment
+variable, which is baked into the bundle at build time. When unset, the app
+calls same-origin `/api/*` (the Docker/nginx setup).
 
-```
-https://<your-service-name>.up.railway.app/api/:path*
-```
+Vercel rewrites cannot read environment variables, so there is no longer a
+hardcoded backend URL in `vercel.json` — the target is fully configurable per
+deployment via env.
 
 ## Steps
 
 1. Deploy the backend to Railway first (see `README.md`)
-2. Copy the Railway backend URL from the Railway dashboard
-3. Update `frontend/vercel.json` `destination` with your URL
-4. Deploy frontend to Vercel: connect your GitHub repo
-5. Set `CORS_ORIGINS` in Railway Variables to your Vercel deployment URL
+2. Connect the GitHub repo to Vercel and set **Root Directory** to `frontend/`
+3. In Vercel project settings → Environment Variables, set:
+   - `VITE_API_BASE_URL` = your Railway backend URL,
+     e.g. `https://<your-service-name>.up.railway.app` (no trailing slash
+     needed; one is stripped automatically)
+4. Deploy the frontend: push to GitHub, or run `vercel` from `frontend/`
+5. Set `CORS_ORIGINS` in Railway Variables to your Vercel deployment URL —
+   the frontend now calls the backend cross-origin, and the backend rejects
+   origins that are not listed

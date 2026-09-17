@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { apiUrl } from '../api';
 import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
@@ -105,7 +106,7 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
     setPdfError(null);
 
     try {
-      const response = await fetch(`/api/export-pdf?session_id=${encodeURIComponent(sessionId)}`, {
+      const response = await fetch(apiUrl(`/api/export-pdf?session_id=${encodeURIComponent(sessionId)}`), {
         method: 'POST',
       });
 
