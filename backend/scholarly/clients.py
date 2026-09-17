@@ -124,6 +124,15 @@ def _request_with_retry(
                 response.raise_for_status()
                 return response
         except requests.exceptions.RequestException as exc:
+            if (
+                isinstance(exc, requests.exceptions.HTTPError)
+                and exc.response is not None
+                and exc.response.status_code < 500
+            ):
+                # 4xx (other than 429) is not transient — fail immediately.
+                raise ScholarlyAPIError(
+                    f"{url} returned HTTP {exc.response.status_code}"
+                ) from exc
             last_error = exc
             logger.warning(
                 "Scholarly API %s request failed (attempt %d/%d): %s",

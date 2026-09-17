@@ -9,12 +9,12 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from langsmith import traceable
-
-from graph.state import ReportState
 from scholarly.merge import (
     collect_scholarly_results,
     merge_scholarly_and_web_results,
 )
+
+from graph.state import ReportState
 from utils.clients import get_tavily_client
 from utils.url_utils import extract_domain
 
@@ -28,7 +28,7 @@ def perform_tavily_search(
     max_results: int = 5,
     retries: int = 2,
     stream_updates=None,
-    timestamp: str = None,
+    timestamp: str | None = None,
 ) -> list:
     """Execute a single Tavily search with retry logic"""
     import time

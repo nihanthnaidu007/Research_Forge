@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <link href="http://export.arxiv.org/api/query?search_query=all:graph%20neural%20networks" rel="self" type="application/atom+xml"/>
+  <title type="html">ArXiv Query: search_query=all:graph neural networks</title>
+  <id>http://arxiv.org/api/abc</id>
+  <updated>2026-09-17T00:00:00-04:00</updated>
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v2</id>
+    <updated>2026-01-20T00:00:00-05:00</updated>
+    <published>2024-01-23T00:00:00-05:00</published>
+    <title>Graph Neural Networks: A Survey</title>
+    <summary>A survey of graph neural network architectures and applications.</summary>
+    <author>
+      <name>Zonghan Wu</name>
+    </author>
+    <author>
+      <name>Shirui Pan</name>
+    </author>
+    <link href="http://arxiv.org/abs/2401.12345v2" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://books.example.org/not-an-arxiv-paper</id>
+    <updated>2026-01-20T00:00:00-05:00</updated>
+    <published>2024-01-23T00:00:00-05:00</published>
+    <title>Not an arXiv entry</title>
+    <summary>Skipped — no arxiv.org/abs id, so no persistent identifier.</summary>
+    <author>
+      <name>Nobody Nowhere</name>
+    </author>
+  </entry>
+</feed>
