@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { FileEdit, CheckCircle, ArrowRight } from 'lucide-react';
+import { FileEdit, CheckCircle, ArrowRight, Save, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,14 +10,23 @@ export function OutlineApprovalZone({
   outline,
   onUpdateSection,
   onApprove,
+  onSave,
   isLoading,
   outlineEdits,
   onEditsChange
 }) {
   // Track which sections the user actually edited
   const [editedSections, setEditedSections] = useState(new Set());
+  const [saveState, setSaveState] = useState('idle'); // idle | saving | saved | error
   // Snapshot the original outline on first render for local diff
   const originalRef = useRef(outline.map(s => ({ ...s })));
+
+  const handleSave = useCallback(async () => {
+    if (!onSave) return;
+    setSaveState('saving');
+    const ok = await onSave();
+    setSaveState(ok ? 'saved' : 'error');
+  }, [onSave]);
 
   const handleFieldChange = useCallback((index, field, value) => {
     // Forward to parent handler
@@ -184,13 +193,37 @@ export function OutlineApprovalZone({
         />
       </div>
 
-      {/* Approve Button */}
+      {/* Outline persistence + Approve Button */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.5 }}
-        className="flex justify-end pt-4"
+        className="flex items-center justify-end gap-3 pt-4"
       >
+        {saveState === 'saved' && (
+          <span className="text-xs text-emerald-400" data-testid="outline-saved-indicator">
+            Edits saved to server
+          </span>
+        )}
+        {saveState === 'error' && (
+          <span className="text-xs text-rose-400" data-testid="outline-save-error">
+            Save failed — see error banner
+          </span>
+        )}
+        <Button
+          onClick={handleSave}
+          disabled={isLoading || saveState === 'saving' || !onSave}
+          variant="outline"
+          className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
+          data-testid="save-outline-btn"
+        >
+          {saveState === 'saving' ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4 mr-2" />
+          )}
+          Save Changes
+        </Button>
         <Button
           onClick={onApprove}
           disabled={isLoading}

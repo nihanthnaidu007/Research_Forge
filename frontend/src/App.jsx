@@ -33,6 +33,8 @@ function App() {
     versioning_report,
     outlineEdits,
     setOutlineEdits,
+    saveOutline,
+    exportReport,
     // Actions
     startReport,
     resetReport,
@@ -100,6 +102,8 @@ function App() {
           versioningReport={versioning_report}
           outlineEdits={outlineEdits}
           onEditsChange={setOutlineEdits}
+          onSaveOutline={saveOutline}
+          onExport={exportReport}
         />
       </motion.main>
       

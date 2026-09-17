@@ -11,6 +11,7 @@ import { Textarea } from './ui/textarea';
 import { Label } from './ui/label';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 import AgentStatusPanel from './AgentStatus';
+import HistoryPanel from './HistoryPanel';
 
 function StatCard({ icon: Icon, label, value, subtext }) {
   return (
@@ -284,6 +285,9 @@ export function Sidebar({
             )}
           </motion.div>
         )}
+
+        {/* Report History */}
+        <HistoryPanel />
       </div>
     </div>
   );
