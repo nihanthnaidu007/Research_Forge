@@ -13,6 +13,7 @@ import server
 from conftest import API_KEY_HEADERS, FakeGraph, seed_session
 
 from graph import supervisor
+from graph.state import create_initial_state
 from utils import token_budget
 
 
@@ -232,14 +233,38 @@ def test_old_checkpoint_state_works_end_to_end():
     state = _full_state()
     for key in ("research_rounds", "coverage_gaps", "redirect_focus"):
         state.pop(key, None)
-    monkeypatch_safe = None  # thresholds read at call time; env untouched
-    assert monkeypatch_safe is None
 
     tripped, gaps, affected = supervisor.evaluate_coverage_gaps(state)
     assert tripped  # defaults: rounds 0 < cap
     if affected:
         supervisor.apply_research_round(state, gaps, affected)
         assert state["research_rounds"] == 1
+
+
+def test_old_checkpoint_with_none_channel_values_routes_safely():
+    """LangGraph materializes channels that a pre-W4 checkpoint never wrote
+    as explicit None values — state.get(key, default) does NOT replace those.
+    A live dogfood run caught exactly this, so every W4 reader must treat
+    None like 'absent'."""
+    state = _full_state()
+    state["research_rounds"] = None
+    state["coverage_gaps"] = None
+    state["redirect_focus"] = None
+
+    tripped, gaps, affected = supervisor.evaluate_coverage_gaps(state)
+    assert tripped
+    supervisor.apply_research_round(state, gaps, affected)
+    assert state["research_rounds"] == 1
+    assert isinstance(state["coverage_gaps"], list) and state["coverage_gaps"]
+
+
+def test_create_initial_state_never_materializes_none_w4_fields():
+    """Fresh runs start with concrete W4 defaults so live channels and the
+    status endpoint report numbers/lists, never None."""
+    initial = create_initial_state("dogfood topic")
+    assert initial["research_rounds"] == 0
+    assert initial["coverage_gaps"] == []
+    assert initial["redirect_focus"] == ""
 
 
 def test_status_endpoint_reports_round_fields_for_old_sessions(

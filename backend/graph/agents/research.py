@@ -130,8 +130,8 @@ def research_node(state: ReportState) -> ReportState:
     # recorded coverage gaps) searches gap-scoped queries instead of the
     # standard templates, and APPENDS to research_results so earlier rounds'
     # sources stay citable.
-    research_round = state.get("research_rounds", 0)
-    coverage_gaps = state.get("coverage_gaps", [])
+    research_round = state.get("research_rounds") or 0
+    coverage_gaps = state.get("coverage_gaps") or []
     is_re_round = research_round > 0 and bool(coverage_gaps)
 
     if is_re_round:

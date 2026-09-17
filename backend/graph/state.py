@@ -210,6 +210,13 @@ def create_initial_state(
         "original_outline": [],
         "changed_section_ids": [],
         "sections_needing_rewrite": [],
+        # W4 deep-research loop. Initialized here so fresh runs never see
+        # None-valued channels, and read defensively ("or" fallbacks) at every
+        # use site: pre-W4 checkpoints restored through the new schema carry
+        # these keys as None, which state.get(key, default) does NOT replace.
+        "research_rounds": 0,
+        "coverage_gaps": [],
+        "redirect_focus": "",
         "written_sections": [],
         "current_section_index": 0,
         "sources": [],

@@ -199,7 +199,7 @@ def apply_research_round(state: dict, gaps: list[str], affected: list[str]) -> N
     from completed_agents — it has work to do again.
     """
     timestamp = datetime.now().strftime("%H:%M:%S")
-    state["research_rounds"] = state.get("research_rounds", 0) + 1
+    state["research_rounds"] = (state.get("research_rounds") or 0) + 1
     state["coverage_gaps"] = list(gaps)
 
     affected_set = set(affected)
@@ -318,7 +318,7 @@ def get_supervisor_decision(state: dict) -> SupervisorDecision:
         and approved_outline
         and len(written_sections) >= len(approved_outline)
         and not citations_done
-        and state.get("research_rounds", 0) < max_research_rounds()
+        and (state.get("research_rounds") or 0) < max_research_rounds()
     ):
         tripped, gaps, affected = evaluate_coverage_gaps(state)
         if tripped:

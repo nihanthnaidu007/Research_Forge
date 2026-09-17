@@ -262,7 +262,7 @@ def synthesis_node(state: ReportState) -> ReportState:
             fact_check_results,
             document_summary,
             is_last,
-            steering_focus=state.get("redirect_focus", ""),
+            steering_focus=state.get("redirect_focus") or "",
         )
 
         # Compute confidence for this section

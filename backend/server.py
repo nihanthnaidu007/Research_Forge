@@ -738,7 +738,7 @@ def _apply_redirect_focus(state: dict, focus: str) -> dict:
     outline-edit approval shape, so no graph node learns about redirects.
     """
     timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    merged_focus = f"{state.get('redirect_focus', '')} {focus}".strip()
+    merged_focus = f"{state.get('redirect_focus') or ''} {focus}".strip()
 
     outline = state.get("approved_outline") or state.get("outline", [])
     written = state.get("written_sections", [])
