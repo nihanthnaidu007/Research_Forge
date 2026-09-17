@@ -147,6 +147,12 @@ class ReportState(TypedDict):
     confidence_scores: dict  # section_id -> float (0.0-1.0)
     overall_confidence: float
 
+    # Chat-with-report (W3): Q&A transcript over the completed report.
+    # Entries are {"role": "user" | "assistant", "content": str, "ts": iso}.
+    # Absent on pre-W3 sessions — readers must .get() with a default, never
+    # index directly (W2 old-checkpoint precedent).
+    chat_messages: list[dict]
+
     # Orchestration
     current_agent: str  # name of currently running agent
     completed_agents: list[str]  # agents that have finished
@@ -195,6 +201,7 @@ def create_initial_state(
         "written_sections": [],
         "current_section_index": 0,
         "sources": [],
+        "chat_messages": [],  # W3 chat-with-report; empty keeps old sessions loadable
         "confidence_scores": {},
         "overall_confidence": 0.0,
         "current_agent": "",

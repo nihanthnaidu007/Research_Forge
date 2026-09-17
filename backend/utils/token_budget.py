@@ -21,6 +21,7 @@ import threading
 from contextvars import ContextVar, Token
 
 _budgets: dict[str, "RunTokenBudget"] = {}
+_chat_budgets: dict[str, "RunTokenBudget"] = {}
 _registry_lock = threading.Lock()
 
 # Tracks which session the current call stack serves, so a shared OpenAI
@@ -61,9 +62,9 @@ class RunTokenBudget:
             return self.used_tokens
 
 
-def _max_tokens_from_env() -> int | None:
-    """Parse RUN_TOKEN_BUDGET; empty, zero, or invalid means unlimited."""
-    raw = os.getenv("RUN_TOKEN_BUDGET", "").strip()
+def _max_tokens_from_env_var(name: str) -> int | None:
+    """Parse a token-budget env var; empty, zero, or invalid means unlimited."""
+    raw = os.getenv(name, "").strip()
     if not raw:
         return None
     try:
@@ -71,6 +72,14 @@ def _max_tokens_from_env() -> int | None:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def _max_tokens_from_env() -> int | None:
+    return _max_tokens_from_env_var("RUN_TOKEN_BUDGET")
+
+
+def _chat_max_tokens_from_env() -> int | None:
+    return _max_tokens_from_env_var("CHAT_TOKEN_BUDGET")
 
 
 def ensure_budget(session_id: str) -> RunTokenBudget:
@@ -94,6 +103,34 @@ def get_budget(session_id: str) -> RunTokenBudget | None:
         return _budgets.get(session_id)
 
 
+def ensure_chat_budget(session_id: str) -> RunTokenBudget:
+    """
+    Return the session's per-turn chat budget, creating one from
+    CHAT_TOKEN_BUDGET if absent.
+
+    Chat turns live outside graph-execution phases, so they get their own
+    registry: a chat turn must never share (or clobber) an active run-phase
+    budget, and RUN_TOKEN_BUDGET stays untouched.
+    """
+    with _registry_lock:
+        budget = _chat_budgets.get(session_id)
+        if budget is None:
+            budget = RunTokenBudget(_chat_max_tokens_from_env())
+            _chat_budgets[session_id] = budget
+        return budget
+
+
+def release_chat_budget(session_id: str) -> None:
+    """Drop the session's chat budget. Called when the chat turn ends."""
+    with _registry_lock:
+        _chat_budgets.pop(session_id, None)
+
+
+def get_chat_budget(session_id: str) -> RunTokenBudget | None:
+    with _registry_lock:
+        return _chat_budgets.get(session_id)
+
+
 def set_session_context(session_id: str) -> Token:
     """Bind LLM calls on this call stack (and its to_thread children) to a session."""
     return _current_session_id.set(session_id)
@@ -114,6 +151,8 @@ def record_usage_for_current_session(tokens: int) -> None:
     if session_id is None:
         return
     with _registry_lock:
-        budget = _budgets.get(session_id)
+        # Graph phases first; chat turns (own registry) second. The two never
+        # overlap for one session — chat is gated to status == complete.
+        budget = _budgets.get(session_id) or _chat_budgets.get(session_id)
     if budget is not None:
         budget.record(tokens)

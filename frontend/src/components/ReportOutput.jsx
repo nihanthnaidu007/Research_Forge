@@ -125,7 +125,9 @@ function getIntegrityStatus(source) {
   return status && INTEGRITY_META[status] ? status : 'unknown';
 }
 
-function IntegrityChip({ source }) {
+// Exported for the W3 chat panel, which renders the same integrity
+// aesthetics over assistant answers (W2 kept them report-internal).
+export function IntegrityChip({ source }) {
   const status = getIntegrityStatus(source);
   const { label, icon: Icon, bg, text, border } = INTEGRITY_META[status];
 
@@ -168,7 +170,7 @@ export function splitCitationContent(content) {
   return parts;
 }
 
-function CitationPanel({ source, number, onClose }) {
+export function CitationPanel({ source, number, onClose }) {
   const status = getIntegrityStatus(source);
   const hasSnippet = source && source.snippet && source.snippet.trim() !== '';
 

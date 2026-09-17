@@ -4,6 +4,7 @@ import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, FileCode, Fi
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
+import ChatPanel from './ChatPanel';
 
 function WelcomeState() {
   return (
@@ -166,6 +167,10 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
         overallConfidence={overallConfidence}
         versioningReport={versioningReport}
       />
+
+      {/* Chat lives beside the report — the only state where the report
+          and its sources exist to ground answers on. */}
+      <ChatPanel sources={sources} />
     </motion.div>
   );
 }

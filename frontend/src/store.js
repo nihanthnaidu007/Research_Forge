@@ -43,6 +43,12 @@ const initialState = {
   history: [],
   historyLoading: false,
   historyError: null,
+  // Chat-with-report transcript (W3). Lives in the store, not component
+  // state, so the transcript survives re-renders and resets with the session.
+  chatMessages: [],
+  chatLoading: false,
+  chatError: null,
+  chatSessionExpired: false,
 };
 
 export const useStore = create((set, get) => ({
@@ -462,6 +468,73 @@ export const useStore = create((set, get) => ({
       `researchforge-report.${fallbackExt}`
     );
   },
+
+  // Chat with the finished report (W3). The backend owns grounding,
+  // citation validation, and budgets; the store just carries turns and
+  // surfaces failure states. 404 after the 2h TTL means the session (and
+  // its transcript) is gone — surfaced as an explicit expired banner.
+  sendChatMessage: async (message) => {
+    const { sessionId, sessionToken } = get();
+    const trimmed = (message || '').trim();
+    if (!sessionId || !sessionToken || !trimmed) return false;
+
+    const now = () => new Date().toISOString();
+    set((state) => ({
+      chatMessages: [...state.chatMessages, { role: 'user', content: trimmed, ts: now() }],
+      chatLoading: true,
+      chatError: null,
+      chatSessionExpired: false,
+    }));
+
+    try {
+      const response = await fetch(apiUrl(`/api/session/${sessionId}/chat`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
+        body: JSON.stringify({ message: trimmed }),
+      });
+
+      if (response.status === 404) {
+        set({
+          chatLoading: false,
+          chatError: 'This report session has expired — start a new report to chat again.',
+          chatSessionExpired: true,
+        });
+        return false;
+      }
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        const detail = errData.detail;
+        const message =
+          typeof detail === 'string'
+            ? detail
+            : detail?.message || `Chat failed (${response.status})`;
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      set((state) => ({
+        chatMessages: [
+          ...state.chatMessages,
+          {
+            role: 'assistant',
+            content: data.answer,
+            resolvedCitations: data.resolved_citations || [],
+            unresolvedCitations: data.unresolved_citations || [],
+            ts: now(),
+          },
+        ],
+        chatLoading: false,
+      }));
+      return true;
+    } catch (err) {
+      console.error('Chat error:', err);
+      set({ chatLoading: false, chatError: err.message || 'Chat failed' });
+      return false;
+    }
+  },
+
+  clearChatError: () => set({ chatError: null, chatSessionExpired: false }),
 
   resetReport: () => {
     if (_polling.intervalId) {
