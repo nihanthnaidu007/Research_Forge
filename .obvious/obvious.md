@@ -123,9 +123,10 @@ store plus all API/SSE wiring.
 
 - `server.py` strips every proxy env var at startup (Tavily/OpenAI need direct egress).
   Add domains to `NO_PROXY` if you must run behind a proxy.
-- In this sandbox the NIC IP is link-local (169.254.x.x), so react-scripts computes an
-  empty `allowedHosts` and webpack-dev-server refuses to start. Env-only workaround:
-  `DANGEROUSLY_DISABLE_HOST_CHECK=true yarn start` (`HOST=localhost` does NOT fix it).
+- (Resolved) The CRA-era note about link-local NIC IPs breaking the dev server
+  (`empty allowedHosts` → `DANGEROUSLY_DISABLE_HOST_CHECK=true yarn start`)
+  applied to react-scripts/webpack-dev-server and is obsolete — PR #3 migrated
+  the frontend to Vite, whose dev server starts cleanly in this sandbox.
 - `backend/Dockerfile` installs pinned `requirements.lock`; local dev uses
   `requirements.txt`. Keep both in sync.
 - Rate limits: `/api/run` 10/min per IP; `/api/upload-pdf` 30/min per IP.
