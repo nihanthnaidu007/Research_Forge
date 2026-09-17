@@ -142,9 +142,29 @@ def fake_db(monkeypatch):
         row = store.get(session_id)
         return row["token_hash"] if row else None
 
+    def list_sessions(limit=50, offset=0):
+        # Mirrors db.list_sessions: metadata only, newest first.
+        rows = sorted(
+            (copy.deepcopy(row["data"]) for row in store.values()),
+            key=lambda row: row.get("created_at", ""),
+            reverse=True,
+        )
+        return [
+            {
+                "id": row["id"],
+                "topic": row["topic"],
+                "depth": row["depth"],
+                "status": row["status"],
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", row.get("created_at", "")),
+            }
+            for row in rows[offset : offset + limit]
+        ]
+
     monkeypatch.setattr(server, "create_session", create_session)
     monkeypatch.setattr(server, "get_session", get_session)
     monkeypatch.setattr(server, "update_session", update_session)
+    monkeypatch.setattr(server, "list_sessions", list_sessions)
     monkeypatch.setattr(server, "db_cleanup_sessions", lambda ttl: [])
     monkeypatch.setattr(auth, "get_session_token_hash", get_session_token_hash)
     return store
