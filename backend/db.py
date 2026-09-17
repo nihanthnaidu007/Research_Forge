@@ -137,6 +137,38 @@ def get_session_token_hash(session_id: str) -> str | None:
     return row[0] if row else None
 
 
+def list_sessions(limit: int = 50, offset: int = 0) -> list[dict]:
+    """
+    Return session metadata for the history view, newest first.
+
+    Deliberately excludes state and token material: the history listing is
+    the one endpoint that spans ALL sessions, so it must never carry report
+    content or ownership secrets.
+    """
+    with get_pool().connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, topic, depth, status, created_at, updated_at
+            FROM sessions
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            (limit, offset),
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "topic": row[1],
+            "depth": row[2],
+            "status": row[3],
+            "created_at": row[4].isoformat() if hasattr(row[4], "isoformat") else str(row[4]),
+            "updated_at": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]),
+        }
+        for row in rows
+    ]
+
+
 def update_session(session_id: str, updates: dict) -> None:
     """
     Update specific fields of a session.

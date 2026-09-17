@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import { apiUrl } from './api';
+import { authHeaders, apiUrl, downloadResponseAsFile } from './api';
 
 export const AGENTS = [
   { key: 'research', label: 'Web Research', icon: 'Search', description: 'Gathering sources from the web' },
@@ -39,6 +39,10 @@ const initialState = {
   traceUrl: null,
   versioning_report: null,
   outlineEdits: '',
+  sessionToken: null,
+  history: [],
+  historyLoading: false,
+  historyError: null,
 };
 
 export const useStore = create((set, get) => ({
@@ -123,6 +127,7 @@ export const useStore = create((set, get) => ({
           try {
             const uploadRes = await fetch(apiUrl('/api/upload-pdf'), {
               method: 'POST',
+              headers: authHeaders(),
               body: formData,
             });
             if (uploadRes.ok) {
@@ -144,7 +149,7 @@ export const useStore = create((set, get) => ({
       try {
         response = await fetch(apiUrl('/api/run'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             topic: topic.trim(),
             depth: depth || 'quick',
@@ -179,7 +184,7 @@ export const useStore = create((set, get) => ({
         throw new Error('No session ID returned from server');
       }
 
-      set({ sessionId, isLoading: false });
+      set({ sessionId, sessionToken: data.session_token || null, isLoading: false });
       get().startPolling(sessionId);
 
     } catch (err) {
@@ -200,7 +205,9 @@ export const useStore = create((set, get) => ({
       if (get().sessionId !== sessionId) return;
 
       try {
-        const response = await fetch(apiUrl(`/api/session/${sessionId}/status`));
+        const response = await fetch(apiUrl(`/api/session/${sessionId}/status`), {
+          headers: authHeaders(),
+        });
 
         if (get().sessionId !== sessionId) return;
 
@@ -306,7 +313,9 @@ export const useStore = create((set, get) => ({
     if (get().sessionId !== sessionId) return;
 
     try {
-      const response = await fetch(apiUrl(`/api/session/${sessionId}`));
+      const response = await fetch(apiUrl(`/api/session/${sessionId}`), {
+        headers: authHeaders(),
+      });
       if (!response.ok) return;
 
       const data = await response.json();
@@ -324,11 +333,53 @@ export const useStore = create((set, get) => ({
     }
   },
 
+  saveOutline: async () => {
+    // Persist outline edits to the server (PUT) so the approval gate
+    // resumes synthesis from the edited outline, not the original.
+    const { sessionId, sessionToken, outline } = get();
+    if (!sessionId || !sessionToken) return false;
+
+    try {
+      const response = await fetch(apiUrl(`/api/session/${sessionId}/outline`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
+        body: JSON.stringify({ outline }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Failed to save outline (${response.status})`);
+      }
+
+      const data = await response.json();
+      if (data.outline) {
+        set({ outline: data.outline });
+      }
+      return true;
+    } catch (err) {
+      console.error('Save outline error:', err);
+      set({ error: err.message || 'Failed to save outline' });
+      return false;
+    }
+  },
+
   approveOutline: async (editedOutline) => {
-    const { sessionId, outline } = get();
+    const { sessionId, sessionToken, outline } = get();
     if (!sessionId) return;
 
     const outlineToSend = editedOutline || outline;
+
+    // Persist edits server-side first; the approval gate resumes the
+    // graph with the edited outline from the checkpoint.
+    const saved = await get().saveOutline();
+    if (!saved) {
+      set({
+        status: 'error',
+        error: 'Failed to save outline edits — approval aborted',
+        isLoading: false,
+      });
+      return;
+    }
 
     set({
       status: 'running',
@@ -342,7 +393,7 @@ export const useStore = create((set, get) => ({
     try {
       const response = await fetch(apiUrl('/api/approve-outline'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders(sessionToken) },
         body: JSON.stringify({
           session_id: sessionId,
           outline: outlineToSend,
@@ -367,6 +418,48 @@ export const useStore = create((set, get) => ({
       console.error('Approve outline error:', err);
       set({ status: 'error', error: err.message, isLoading: false });
     }
+  },
+
+  fetchHistory: async () => {
+    set({ historyLoading: true, historyError: null });
+    try {
+      const response = await fetch(apiUrl('/api/history'), {
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Failed to load history (${response.status})`);
+      }
+      const data = await response.json();
+      set({ history: data.sessions || [], historyLoading: false });
+    } catch (err) {
+      console.error('History load error:', err);
+      set({ historyError: err.message, historyLoading: false });
+    }
+  },
+
+  exportReport: async (format) => {
+    // format: 'pdf' | 'markdown' | 'html'
+    const { sessionId, sessionToken } = get();
+    if (!sessionId || !sessionToken) {
+      throw new Error('No active session to export');
+    }
+
+    const endpoint = `/api/export-${format}`;
+    const response = await fetch(
+      apiUrl(`${endpoint}?session_id=${encodeURIComponent(sessionId)}`),
+      { method: 'POST', headers: authHeaders(sessionToken) }
+    );
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.detail || `Export failed (${response.status})`);
+    }
+
+    return downloadResponseAsFile(
+      response,
+      `researchforge-report.${format === 'markdown' ? 'md' : format}`
+    );
   },
 
   resetReport: () => {

@@ -1,7 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { apiUrl } from '../api';
-import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, FileCode, FileText } from 'lucide-react';
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
@@ -92,52 +91,34 @@ function ErrorState({ error, onReset }) {
   );
 }
 
-function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport }) {
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [pdfError, setPdfError] = useState(null);
+const EXPORT_FORMATS = [
+  { format: 'pdf', label: 'PDF', icon: Download, testid: 'download-pdf-btn' },
+  { format: 'markdown', label: 'Markdown', icon: FileText, testid: 'download-markdown-btn' },
+  { format: 'html', label: 'HTML', icon: FileCode, testid: 'download-html-btn' },
+];
 
-  const handleDownload = useCallback(async () => {
+function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport }) {
+  const [exportLoading, setExportLoading] = useState(null); // format id
+  const [exportError, setExportError] = useState(null);
+
+  const handleExport = useCallback(async (format) => {
     if (!sessionId) {
-      setPdfError('No session ID available');
+      setExportError('No session ID available');
       return;
     }
 
-    setPdfLoading(true);
-    setPdfError(null);
+    setExportLoading(format);
+    setExportError(null);
 
     try {
-      const response = await fetch(apiUrl(`/api/export-pdf?session_id=${encodeURIComponent(sessionId)}`), {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || `Export failed (${response.status})`);
-      }
-
-      const blob = await response.blob();
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = 'researchforge-report.pdf';
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (match) filename = match[1];
-      }
-
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      await onExport(format);
     } catch (err) {
-      console.error('PDF download error:', err);
-      setPdfError(err.message);
+      console.error(`${format} export error:`, err);
+      setExportError(err.message);
     } finally {
-      setPdfLoading(false);
+      setExportLoading(null);
     }
-  }, [sessionId]);
+  }, [sessionId, onExport]);
 
   return (
     <motion.div
@@ -146,8 +127,8 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
       className="space-y-6"
     >
       <div className="flex items-center justify-end gap-3">
-        {pdfError && (
-          <span className="text-xs text-rose-400 mr-2">{pdfError}</span>
+        {exportError && (
+          <span className="text-xs text-rose-400 mr-2">{exportError}</span>
         )}
         <Button
           onClick={onReset}
@@ -157,20 +138,23 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
           <RotateCcw className="w-4 h-4 mr-2" />
           New Report
         </Button>
-        <Button
-          onClick={handleDownload}
-          disabled={pdfLoading}
-          variant="outline"
-          className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
-          data-testid="download-pdf-btn"
-        >
-          {pdfLoading ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-          ) : (
-            <Download className="w-4 h-4 mr-2" />
-          )}
-          {pdfLoading ? 'Generating...' : 'Download PDF'}
-        </Button>
+        {EXPORT_FORMATS.map(({ format, label, icon: Icon, testid }) => (
+          <Button
+            key={format}
+            onClick={() => handleExport(format)}
+            disabled={exportLoading !== null}
+            variant="outline"
+            className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
+            data-testid={testid}
+          >
+            {exportLoading === format ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <Icon className="w-4 h-4 mr-2" />
+            )}
+            {exportLoading === format ? 'Generating...' : `Download ${label}`}
+          </Button>
+        ))}
       </div>
       
       <ReportOutput 
@@ -203,7 +187,9 @@ export function MainPanel({
   onReset,
   versioningReport,
   outlineEdits,
-  onEditsChange
+  onEditsChange,
+  onSaveOutline,
+  onExport
 }) {
   const renderContent = () => {
     // Error state — check first so errors always show
@@ -223,6 +209,7 @@ export function MainPanel({
           outline={outline}
           onUpdateSection={onUpdateSection}
           onApprove={onApprove}
+          onSave={onSaveOutline}
           isLoading={isLoading}
           outlineEdits={outlineEdits}
           onEditsChange={onEditsChange}
@@ -246,6 +233,7 @@ export function MainPanel({
           overallConfidence={overallConfidence}
           onReset={onReset}
           versioningReport={versioningReport}
+          onExport={onExport}
         />
       );
     }
