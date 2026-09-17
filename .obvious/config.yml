@@ -1,0 +1,6 @@
+# .obvious/config.yml — repo policy for obvious workers.
+# Detected from GitHub repo settings (nihanthnaidu007/Research_Forge) on 2026-09-17.
+defaultBranch: main
+mergeMethod: squash        # repo allows merge/squash/rebase; squash chosen for setup PRs
+requireHumanMerge: true    # human approval required before merging to main
+deleteBranchOnMerge: false
