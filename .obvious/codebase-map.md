@@ -1,6 +1,6 @@
 # ResearchForge — Codebase Map
 
-Folder-level map (depth ≤ 2). Backend is a FastAPI + LangGraph pipeline; frontend is a CRA React 19 SPA.
+Folder-level map (depth ≤ 2). Backend is a FastAPI + LangGraph pipeline; frontend is a Vite React 19 SPA (migrated from CRA/craco in PR #3).
 
 | Path | Kind | Purpose |
 | --- | --- | --- |
@@ -12,9 +12,9 @@ Folder-level map (depth ≤ 2). Backend is a FastAPI + LangGraph pipeline; front
 | `backend/utils/` | package | OpenAI/Tavily client singletons, env validation, URL validation, scoring, versioning |
 | `backend/eval/` | package | LangSmith tracer setup |
 | `backend/export/` | package | ReportLab PDF exporter |
-| `frontend/` | CRA app | React 19 SPA; `yarn start` dev on :3000, `yarn build` → nginx image; `vercel.json` rewrites for prod |
+| `frontend/` | Vite app | React 19 SPA; `yarn dev` on :5173 (proxies `/api` → 8000 via `vite.config.js`), `yarn build` → `dist/` → nginx image; `vercel.json` rewrites for prod |
 | `frontend/src/` | source | App shell, Zustand store, components |
 | `frontend/src/components/` | dir | Sidebar (topic/depth/PDF/URL input), MainPanel, AgentStatus, OutlineApproval (HITL gate), ReportOutput, TraceLog |
 | `frontend/src/components/ui/` | dir | Radix-based primitives (button, input, tabs, textarea, scroll-area…) |
-| `frontend/public/` | static | CRA public assets + `index.html` |
+| `frontend/index.html` | file | Vite entry HTML (project root — Vite does not use `CRA public/` + `react-scripts`) |
 | repo root | files | `docker-compose.yml` (Postgres only), `railway.toml`, `.ruff.toml`, README, architecture SVG |

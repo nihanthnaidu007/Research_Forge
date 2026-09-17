@@ -21,7 +21,7 @@ with all session state persisted to Postgres. FastAPI backend + React 19 SPA.
 | Backend | Python 3.11+ (sandbox: 3.13), FastAPI + uvicorn, pydantic v2, SlowAPI rate limiting |
 | Pipeline | LangGraph (>=1.0) + langgraph-checkpoint-postgres, OpenAI GPT-4o, Tavily |
 | Database | PostgreSQL 16 (compose image; sandbox runs 17 via apt), psycopg3 + pool |
-| Frontend | React 19, CRA + craco, Tailwind, Zustand, Yarn 1.22.22 |
+| Frontend | React 19, Vite 7 (migrated from CRA/craco in PR #3), Tailwind, Zustand, Yarn 1.22.22 |
 | Export / tracing | ReportLab PDFs; LangSmith (optional) |
 | Lint | ruff (config in `.ruff.toml`) |
 
@@ -43,11 +43,12 @@ uvicorn server:app --reload --port 8000
 ```
 Health: `curl http://localhost:8000/api/health` → `{"status":"ok","checks":{"env_vars":"ok","database":"ok"}}`
 
-### 3. Frontend — http://localhost:3000
+### 3. Frontend — http://localhost:5173
 ```bash
 cd frontend
 yarn install      # yarn 1.22.22 (corepack enable)
-yarn start        # CRA dev server; proxies /api/* to localhost:8000
+yarn dev          # Vite dev server on :5173; proxies /api/* to localhost:8000
+yarn build        # vite build → dist/
 ```
 
 ### Checks
@@ -55,7 +56,10 @@ yarn start        # CRA dev server; proxies /api/* to localhost:8000
 backend/.venv/bin/ruff check backend/    # lint — passed at onboarding
 (cd frontend && yarn build)              # production build — compiles clean
 ```
-No unit test suite and no typecheck config exist in this repo yet.
+Backend has an 81-test pytest suite (`backend/.venv/bin/python -m pytest` from
+`backend/`). CI (`.github/workflows/ci.yml`) runs ruff lint, the pytest suite,
+and the Vite production build. No frontend unit-test suite and no typecheck
+config exist yet.
 
 ## Environment Variables (backend/.env)
 
@@ -67,8 +71,9 @@ No unit test suite and no typecheck config exist in this repo yet.
 | `CORS_ORIGINS` | yes | comma-separated origins, e.g. `http://localhost:3000` |
 | `LANGCHAIN_*` | no | LangSmith tracing (off by default) |
 
-- `backend/.env.example` is referenced by the README but **missing from the repo**
-  (`.gitignore` ignores `.env.*`) — TODO(confirm): restore it.
+- `backend/.env.example` is tracked and lists all required variables —
+  copy it to `backend/.env` and fill in real values (resolved 2026-09-17;
+  it had previously been referenced but missing).
 - Onboarding used **placeholder** OpenAI/Tavily keys (startup validates presence only).
   Real keys are required for live research/LLM calls — TODO(confirm): inject via the
   credentials flow.
@@ -78,7 +83,7 @@ No unit test suite and no typecheck config exist in this repo yet.
 | Service | Port |
 | --- | --- |
 | FastAPI backend | 8000 (binds 127.0.0.1) |
-| CRA frontend | 3000 (proxies /api → 8000) |
+| Vite frontend | 5173 (proxies /api → 8000) |
 | Postgres | 5432 |
 
 ## Local Verification Summary

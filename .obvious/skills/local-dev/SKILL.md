@@ -1,6 +1,6 @@
 ---
 name: local-dev
-description: Bring up and verify the ResearchForge dev stack (Postgres + FastAPI backend + CRA frontend) in this sandbox
+description: Bring up and verify the ResearchForge dev stack (Postgres + FastAPI backend + Vite frontend) in this sandbox
 ---
 
 # Local Dev — ResearchForge
@@ -26,9 +26,9 @@ Durable record of the 2026-09-17 onboarding run in sandbox `cmp_cRIS4QDw`
    Startup validates env vars, creates the `sessions` table and LangGraph checkpoint schema.
    Verify: `curl http://localhost:8000/api/health` → 200 with `database: ok`.
 3. **Frontend** — `cd frontend && corepack enable && yarn install --frozen-lockfile`
-   then `tmux new-session -d -s frontend 'BROWSER=none CI=false DANGEROUSLY_DISABLE_HOST_CHECK=true yarn start'`.
-   Wait for "Compiled successfully!" → http://localhost:3000.
-4. **Verify the flow** — browser: load :3000, fill `[data-testid="topic-input"]`, pick a
+   then `tmux new-session -d -s frontend 'yarn dev'`.
+   Wait for Vite's "ready" banner → http://localhost:5173 (proxies `/api` → 8000).
+4. **Verify the flow** — browser: load :5173, fill `[data-testid="topic-input"]`, pick a
    depth tab, click `[data-testid="run-report-btn"]`; the UI polls
    `/api/session/{id}/status`. API: `POST /api/run`, then `GET /api/session/{id}` and
    `GET /api/session/{id}/stream` (SSE).
@@ -37,10 +37,10 @@ Durable record of the 2026-09-17 onboarding run in sandbox `cmp_cRIS4QDw`
 
 - **No Docker** → apt-installed Postgres 17 instead of the compose `postgres:16-alpine`
   image. Same credentials/DB/port, so `DATABASE_URL` matches the README default.
-- **CRA dev server fails with `options.allowedHosts[0] should be a non-empty string`**:
-  the sandbox NIC IP is link-local (169.254.0.21), which react-dev-utils discards, leaving
-  `allowedHosts` empty. Fix: `DANGEROUSLY_DISABLE_HOST_CHECK=true`. Note `HOST=localhost`
-  does NOT fix it (lanUrlForConfig stays undefined in the non-0.0.0.0 branch).
+- **CRA-era host-check workaround is obsolete**: the old
+  `DANGEROUSLY_DISABLE_HOST_CHECK=true yarn start` dance applied to
+  react-scripts (webpack-dev-server) and no longer applies — PR #3 migrated
+  the frontend to Vite, whose dev server starts cleanly on a link-local NIC.
 - **No python3.11** in this image — Python 3.13 + `requirements.txt` (>= ranges) works.
 - **No preinstalled yarn** — `sudo corepack enable` activates yarn 1.22.22 per the
   packageManager field.
@@ -62,6 +62,7 @@ Durable record of the 2026-09-17 onboarding run in sandbox `cmp_cRIS4QDw`
   the pipeline runs, retries 3x per query, and ends with an explicit in-state error
   ("Research returned no results after searching Tavily…") — session still reaches a
   terminal state and persists to Postgres.
-- No unit tests, no typecheck config in the repo — lint + build + runtime flows are the
-  verification surface.
+- Backend has an 81-test pytest suite (`cd backend && python -m pytest`); no
+  frontend unit tests and no typecheck config yet — frontend verification is
+  lint + build + runtime flows.
 - `server.py` strips HTTP(S)_PROXY env vars at startup (Tavily/OpenAI need direct egress).
