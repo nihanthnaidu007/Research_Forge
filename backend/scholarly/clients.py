@@ -44,8 +44,15 @@ ARXIV_MIN_INTERVAL = 3.0
 CROSSREF_MIN_INTERVAL = 1.0
 
 S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+S2_BATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/batch"
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
 CROSSREF_API_URL = "https://api.crossref.org/works"
+
+# Fields requested per paper in integrity lookups. citationCount is the only
+# S2 integrity metric we consume: the live S2 OpenAPI spec
+# (api.semanticscholar.org/graph/v1/swagger.json) defines no retraction
+# field, so retraction comes from Crossref (get_crossref_integrity) only.
+S2_INTEGRITY_FIELDS = "paperId,citationCount,title,year,venue"
 
 ARXIV_ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -92,23 +99,35 @@ def _request_with_retry(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     limiter: RateLimiter,
+    json_body: dict[str, Any] | None = None,
 ) -> requests.Response:
     """
-    GET ``url`` with the shared timeout/retry/rate-limit behavior.
+    GET (or POST when ``json_body`` is set) with the shared
+    timeout/retry/rate-limit behavior.
 
-    Retries 429 and 5xx responses and network-level errors with exponential
-    backoff; other 4xx responses fail immediately (they are not transient).
+    Both verbs share one limiter per API and the same retry rules: transient
+    failures (429 / 5xx / network errors) retry with exponential backoff;
+    other 4xx responses fail immediately (they are not transient).
     """
     last_error: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
         limiter.wait()
         try:
-            response = requests.get(
-                url,
-                params=params,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
+            if json_body is not None:
+                response = requests.post(
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            else:
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
             if response.status_code == 429 or response.status_code >= 500:
                 last_error = ScholarlyAPIError(
                     f"{url} returned HTTP {response.status_code}"
@@ -186,6 +205,15 @@ def _result(
     }
 
 
+def _s2_headers() -> dict[str, str]:
+    """Shared S2 request headers — optional free API key as ``x-api-key``."""
+    headers = {"User-Agent": _USER_AGENT}
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     """
     Search the Semantic Scholar Graph API.
@@ -193,11 +221,6 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict[str, 
     Works unauthenticated (shared rate-limited pool); the optional free API
     key (env ``SEMANTIC_SCHOLAR_API_KEY``) is sent as ``x-api-key``.
     """
-    headers = {"User-Agent": _USER_AGENT}
-    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "").strip()
-    if api_key:
-        headers["x-api-key"] = api_key
-
     response = _request_with_retry(
         S2_SEARCH_URL,
         params={
@@ -205,7 +228,7 @@ def search_semantic_scholar(query: str, max_results: int = 5) -> list[dict[str, 
             "limit": max(1, min(max_results, 20)),
             "fields": "title,abstract,year,venue,authors,externalIds,url",
         },
-        headers=headers,
+        headers=_s2_headers(),
         limiter=_s2_limiter,
     )
     payload = response.json()
@@ -287,6 +310,12 @@ def search_arxiv(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     return results
 
 
+def _crossref_user_agent() -> str:
+    """Crossref polite-pool UA — ``mailto`` when the contact email is set."""
+    contact = os.getenv("CROSSREF_CONTACT_EMAIL", "").strip()
+    return f"{_USER_AGENT} (mailto:{contact})" if contact else _USER_AGENT
+
+
 def search_crossref(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     """
     Search the Crossref works API.
@@ -303,13 +332,10 @@ def search_crossref(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     if contact:
         params["mailto"] = contact
 
-    user_agent = (
-        f"{_USER_AGENT} (mailto:{contact})" if contact else _USER_AGENT
-    )
     response = _request_with_retry(
         CROSSREF_API_URL,
         params=params,
-        headers={"User-Agent": user_agent},
+        headers={"User-Agent": _crossref_user_agent()},
         limiter=_crossref_limiter,
     )
     items = (response.json().get("message") or {}).get("items") or []
@@ -343,3 +369,90 @@ def search_crossref(query: str, max_results: int = 5) -> list[dict[str, Any]]:
             )
         )
     return results
+
+
+# --- Citation integrity lookups (W2) -----------------------------------------
+
+
+def get_paper_integrity(dois: list[str]) -> dict[str, dict[str, Any] | None]:
+    """
+    Resolve papers by DOI via the S2 batch endpoint (one request per call,
+    same 1-RPS ``_s2_limiter`` as every other S2 call).
+
+    Verified against the live S2 API (2026-09): the batch endpoint accepts
+    ``DOI:``-prefixed ids, returns one array entry per id in order, and
+    yields a ``null`` entry for a DOI it cannot match — which this function
+    surfaces as ``None`` so callers can flag the citation as unresolved.
+
+    Returns ``{doi: {s2_paper_id, citation_count, title, year, venue} | None}``
+    keyed by the input DOI strings (case preserved). Raises
+    :class:`ScholarlyAPIError` when the batch request itself fails — callers
+    degrade gracefully.
+    """
+    unique_dois = list(dict.fromkeys(d.strip() for d in dois if d and d.strip()))
+    if not unique_dois:
+        return {}
+
+    response = _request_with_retry(
+        S2_BATCH_URL,
+        params={"fields": S2_INTEGRITY_FIELDS},
+        json_body={"ids": [f"DOI:{doi}" for doi in unique_dois]},
+        headers=_s2_headers(),
+        limiter=_s2_limiter,
+    )
+    papers = response.json()
+
+    integrity: dict[str, dict[str, Any] | None] = {}
+    # strict=False: a malformed short response must degrade to "unknown"
+    # for the missing tail DOIs, not crash the enrichment pass.
+    for doi, paper in zip(unique_dois, papers, strict=False):
+        if not paper:
+            integrity[doi] = None  # S2 answered: this DOI matches no paper
+            continue
+        citation_count = paper.get("citationCount")
+        integrity[doi] = {
+            "s2_paper_id": paper.get("paperId") or "",
+            "citation_count": citation_count if isinstance(citation_count, int) else None,
+            "title": paper.get("title") or "",
+            "year": paper.get("year"),
+            "venue": paper.get("venue") or "",
+        }
+    return integrity
+
+
+def get_crossref_integrity(doi: str) -> bool:
+    """
+    Retraction lookup via Crossref's Retraction Watch metadata.
+
+    Verified against the live Crossref API (2026-09): a retracted work
+    carries ``updated-by`` entries pointing at the notice work, one of type
+    ``"retraction"`` (clean records and non-Crossref DOIs — e.g. DataCite
+    arXiv DOIs — carry no such entry; the notice side symmetrically carries
+    ``update-to``). Only the positive signal marks a citation retracted.
+
+    Returns ``True`` only on confirmed retraction evidence; ``False`` means
+    "no retraction record retrieved" (not in Crossref, or the lookup failed
+    after retries — logged, never silently swallowed). Callers keep the
+    default unflagged state either way: integrity metadata is never guessed.
+    """
+    doi = (doi or "").strip()
+    if not doi:
+        return False
+    try:
+        response = _request_with_retry(
+            f"{CROSSREF_API_URL}/{doi}",
+            headers={"User-Agent": _crossref_user_agent()},
+            limiter=_crossref_limiter,
+        )
+    except ScholarlyAPIError as exc:
+        # Covers both "DOI is not a Crossref record" (fail-fast 404) and
+        # "Crossref unreachable" (exhausted retries). The citation keeps
+        # retracted=False — retraction is only ever asserted on evidence.
+        logger.warning("Crossref retraction lookup failed for %s: %s", doi, exc)
+        return False
+
+    work = response.json().get("message") or {}
+    updates = work.get("updated-by") or []
+    return any(
+        (update.get("type") or "").lower() == "retraction" for update in updates
+    )

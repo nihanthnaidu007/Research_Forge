@@ -11,6 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from langsmith import traceable
 
+from graph.agents.citation_integrity import enrich_citations_with_integrity
 from graph.state import ReportState
 from utils.url_utils import extract_domain
 
@@ -81,6 +82,14 @@ def build_citation_list(
                 "year": result.get("year"),
                 "venue": result.get("venue", "") or "",
                 "persistent_ids": result.get("persistent_ids") or {},
+                # Citation-panel snippet (what the source actually said).
+                "snippet": result.get("snippet", "") or "",
+                # Integrity defaults — the enrichment pass overwrites them
+                # when a DOI resolves. Old checkpointed sessions that skip
+                # the pass keep these honest defaults too.
+                "integrity_status": "unknown",
+                "retracted": False,
+                "citation_count": None,
             }
         )
         citation_number += 1
@@ -138,7 +147,17 @@ def citations_node(state: ReportState) -> ReportState:
     try:
         # Build citation list
         sources = build_citation_list(written_sections, research_results)
+
+        # Resolve scholarly citations against S2/Crossref (existence,
+        # citation count, retraction). Never raises: failures degrade each
+        # citation to integrity_status "unknown" and research continues.
+        sources = enrich_citations_with_integrity(sources)
         state["sources"] = sources
+
+        verified = sum(
+            1 for s in sources if s.get("integrity_status") == "verified"
+        )
+        retracted = sum(1 for s in sources if s.get("retracted"))
 
         # Replace inline citations
         updated_sections = replace_inline_citations(written_sections, sources)
@@ -157,7 +176,11 @@ def citations_node(state: ReportState) -> ReportState:
         state["completed_agents"].append("citations")
         state["is_complete"] = True
 
-        final_msg = f"[{timestamp}] Citations Agent → Complete: {len(sources)} unique sources cited"
+        final_msg = (
+            f"[{timestamp}] Citations Agent → Complete: {len(sources)} unique "
+            f"sources cited, {verified} verified against S2/Crossref"
+            + (f", {retracted} retracted" if retracted else "")
+        )
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
 
