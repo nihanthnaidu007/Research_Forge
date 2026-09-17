@@ -46,6 +46,14 @@ def extract_report_parts(state: dict) -> dict:
                 "title": (source.get("title") or source.get("url") or "Untitled source").strip(),
                 "url": (source.get("url") or "").strip(),
                 "domain": (source.get("domain") or "").strip(),
+                # Provenance + bibliographic metadata (empty for older
+                # sessions) — used by the DOCX/BibTeX exporters.
+                "source_type": source.get("source_type") or "web",
+                "source_api": source.get("source_api") or "",
+                "authors": source.get("authors") or [],
+                "year": source.get("year"),
+                "venue": source.get("venue") or "",
+                "persistent_ids": source.get("persistent_ids") or {},
             }
         )
 

@@ -84,6 +84,7 @@ from eval.langsmith_tracer import (
     is_tracing_enabled,
     setup_tracing,
 )
+from export.bibtex_exporter import build_bibtex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
@@ -1202,6 +1203,82 @@ async def export_html_endpoint(session_id: str):
     return Response(
         content=html,
         media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post(
+    "/export-docx",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_docx_endpoint(session_id: str):
+    """Export completed report as a DOCX file download"""
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        from export.docx_exporter import build_docx_report
+
+        # Create output directory
+        docx_dir = Path("/tmp/researchforge_docx")
+        docx_dir.mkdir(exist_ok=True)
+
+        # Safe filename from topic
+        filename = _export_attachment_filename(state.get("topic", "report"), session_id, "docx")
+        output_path = str(docx_dir / filename)
+
+        # Generate DOCX in thread to avoid blocking event loop
+        docx_path = await asyncio.to_thread(build_docx_report, state, output_path)
+
+        logger.info(f"DOCX exported for session {session_id}: {docx_path}")
+
+        return FileResponse(
+            path=docx_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except ValueError as e:
+        logger.error(f"DOCX export validation error for session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=400, detail="DOCX generation failed — invalid report state"
+        ) from e
+    except Exception as e:
+        logger.error(f"DOCX export error for session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="DOCX generation failed — check server logs for details",
+        ) from e
+
+
+@api_router.post(
+    "/export-bibtex",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_bibtex_endpoint(session_id: str):
+    """Export the report's citations as a BibTeX (.bib) bibliography download."""
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        bibtex = await asyncio.to_thread(build_bibtex_report, state)
+    except ValueError as e:
+        logger.error(
+            f"BibTeX export validation error for session {session_id}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=400, detail="BibTeX export failed — invalid report state"
+        ) from e
+
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, "bib"
+    )
+    logger.info(f"BibTeX exported for session {session_id}")
+
+    return Response(
+        content=bibtex,
+        media_type="application/x-bibtex; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

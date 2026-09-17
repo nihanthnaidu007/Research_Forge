@@ -23,13 +23,26 @@ class OutlineSection(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """A single search result from Tavily"""
+    """
+    A single search result from Tavily or a scholarly API.
+
+    ``source_type``/``source_api`` provenance labels and ``persistent_ids``
+    (S2 paper ID, arXiv ID, DOI) are populated by the scholarly clients;
+    Tavily results keep the web defaults. Author/year/venue metadata feeds
+    BibTeX export.
+    """
 
     url: str
     title: str
     snippet: str
     source_domain: str
     relevance_score: float = Field(default=0.8, ge=0.0, le=1.0)
+    source_type: str = "web"  # "web" | "scholarly"
+    source_api: str = "tavily"  # "tavily" | "semantic_scholar" | "arxiv" | "crossref"
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    venue: str = ""
+    persistent_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class FactCheckResult(BaseModel):
@@ -59,6 +72,14 @@ class Source(BaseModel):
     title: str
     domain: str
     citation_number: int  # e.g. [1], [2] in the report
+    # Provenance + bibliographic metadata carried through from research
+    # results (empty/None for older sessions and plain web sources).
+    source_type: str = "web"  # "web" | "scholarly"
+    source_api: str = ""
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    venue: str = ""
+    persistent_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class DocumentChunk(BaseModel):

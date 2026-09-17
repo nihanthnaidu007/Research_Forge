@@ -1,5 +1,6 @@
 """
-WebResearchAgent - Performs live web research using Tavily API
+WebResearchAgent — performs live web research via Tavily plus scholarly
+source retrieval (Semantic Scholar, arXiv, Crossref) with provenance labels.
 """
 
 import logging
@@ -10,6 +11,10 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.state import ReportState
+from scholarly.merge import (
+    collect_scholarly_results,
+    merge_scholarly_and_web_results,
+)
 from utils.clients import get_tavily_client
 from utils.url_utils import extract_domain
 
@@ -127,6 +132,7 @@ def research_node(state: ReportState) -> ReportState:
         all_results = []
         seen_urls = set()
 
+        web_results = []
         for query in queries:
             state["stream_updates"].append(
                 f"[{timestamp}] Research Agent → Searching: {query[:50]}..."
@@ -139,20 +145,38 @@ def research_node(state: ReportState) -> ReportState:
             for result in results:
                 if result["url"] not in seen_urls:
                     seen_urls.add(result["url"])
-                    all_results.append(result)
+                    web_results.append(result)
 
-        # Sort by relevance score
-        all_results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+        # Scholarly sources run in parallel (one thread per API) and degrade
+        # independently: a source that fails is skipped, research continues
+        # with Tavily and the remaining APIs.
+        scholarly_results, scholarly_counts = collect_scholarly_results(queries)
+        if scholarly_counts:
+            counts_text = ", ".join(
+                f"{api}: {count}" for api, count in sorted(scholarly_counts.items())
+            )
+            state["stream_updates"].append(
+                f"[{timestamp}] Research Agent → ✓ Scholarly sources: {counts_text}"
+            )
+        else:
+            state["stream_updates"].append(
+                f"[{timestamp}] Research Agent → ✗ No scholarly sources available — "
+                "continuing with web results only"
+            )
+
+        # Provenance-labeled merge: scholarly ahead of web on URL conflicts.
+        # merge_scholarly_and_web_results sorts by relevance and caps at 15.
+        all_results = merge_scholarly_and_web_results(scholarly_results, web_results)
 
         # Increment retry counter so supervisor can detect repeated failures
         state["retry_count"] = state.get("retry_count", 0) + 1
 
-        # Limit to top 15 results
-        state["research_results"] = all_results[:15]
+        state["research_results"] = all_results
 
         if not all_results:
             state["error"] = (
-                "Research returned no results after searching Tavily. "
+                "Research returned no results after searching Tavily and the "
+                "scholarly APIs (Semantic Scholar, arXiv, Crossref). "
                 "Possible causes: invalid TAVILY_API_KEY, network connectivity issue, or proxy blocking outbound requests. "
                 "Check backend/.env and network settings."
             )
