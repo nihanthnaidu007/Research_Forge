@@ -15,7 +15,7 @@ RUN yarn build
 FROM nginx:1.25-alpine
 
 # Copy built assets
-COPY --from=builder /app/build /usr/share/nginx/html
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy nginx config (handles SPA routing and API proxying)
 COPY nginx.conf /etc/nginx/conf.d/default.conf

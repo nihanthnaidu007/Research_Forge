@@ -1,4 +1,4 @@
 # Development-only dependencies (tests, lint).
-# Runtime deps live in requirements.txt; pinned installs use requirements.lock.
+# Runtime deps are pinned in requirements.lock (requirements.txt includes it).
 pytest>=8.0.0
 ruff>=0.6.0

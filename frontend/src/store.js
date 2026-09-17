@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { apiUrl } from './api';
+
 export const AGENTS = [
   { key: 'research', label: 'Web Research', icon: 'Search', description: 'Gathering sources from the web' },
   { key: 'document', label: 'Document Ingestion', icon: 'FileText', description: 'Processing uploaded documents' },
@@ -119,7 +121,7 @@ export const useStore = create((set, get) => ({
           formData.append('session_id', tempSessionId);
           formData.append('file', file);
           try {
-            const uploadRes = await fetch('/api/upload-pdf', {
+            const uploadRes = await fetch(apiUrl('/api/upload-pdf'), {
               method: 'POST',
               body: formData,
             });
@@ -140,7 +142,7 @@ export const useStore = create((set, get) => ({
 
       let response;
       try {
-        response = await fetch('/api/run', {
+        response = await fetch(apiUrl('/api/run'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -198,7 +200,7 @@ export const useStore = create((set, get) => ({
       if (get().sessionId !== sessionId) return;
 
       try {
-        const response = await fetch(`/api/session/${sessionId}/status`);
+        const response = await fetch(apiUrl(`/api/session/${sessionId}/status`));
 
         if (get().sessionId !== sessionId) return;
 
@@ -304,7 +306,7 @@ export const useStore = create((set, get) => ({
     if (get().sessionId !== sessionId) return;
 
     try {
-      const response = await fetch(`/api/session/${sessionId}`);
+      const response = await fetch(apiUrl(`/api/session/${sessionId}`));
       if (!response.ok) return;
 
       const data = await response.json();
@@ -338,7 +340,7 @@ export const useStore = create((set, get) => ({
     });
 
     try {
-      const response = await fetch('/api/approve-outline', {
+      const response = await fetch(apiUrl('/api/approve-outline'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

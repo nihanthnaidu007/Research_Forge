@@ -1,37 +1,9 @@
-# ResearchForge — Python Dependencies
-
-# LangGraph & LangChain
-langgraph>=0.2.0
-langgraph-checkpoint-postgres>=2.0.0
-psycopg[binary]>=3.1.0
-psycopg-pool>=3.2.0
-langchain>=0.3.0
-langchain-openai>=0.3.0
-langchain-core>=0.3.0
-
-# LLM Providers
-openai>=1.50.0
-
-# Research Tools
-tavily-python>=0.3.0
-
-# Document Processing
-pdfplumber>=0.11.0
-beautifulsoup4>=4.12.0
-httpx>=0.28.0
-
-# API Server
-fastapi>=0.115.0
-slowapi>=0.1.9
-uvicorn>=0.32.0
-python-multipart>=0.0.9
-
-# Data & Validation
-pydantic>=2.9.0
-python-dotenv>=1.0.0
-
-# Tracing & Evaluation
-langsmith>=0.1.0
-
-# Export
-reportlab>=4.0.0
+# ResearchForge — Python dependencies.
+#
+# The pinned lock is the single source of truth. This file simply includes it
+# so `pip install -r backend/requirements.txt` installs exactly the locked
+# versions everywhere (host, CI, Docker).
+#
+# To bump a dependency: update and re-pin requirements.lock (e.g. with
+# `pip-compile` or `pip freeze`), never by editing this file.
+-r requirements.lock

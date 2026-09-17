@@ -30,3 +30,19 @@ jobs:
           pip install -r backend/requirements.lock -r backend/requirements-dev.txt
       - name: Run tests
         run: pytest backend/tests -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+      - name: Install dependencies
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+      - name: Build frontend
+        working-directory: frontend
+        run: yarn build

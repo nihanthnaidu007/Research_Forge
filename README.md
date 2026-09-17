@@ -61,7 +61,7 @@ User → Research → Document → FactCheck (parallel) → Outline →
 │   ├── Dockerfile                  Multi-stage build, non-root user
 │   ├── server.py                   FastAPI app, SSE streaming, rate limiting
 │   ├── db.py                       Postgres session store + connection pool
-│   ├── requirements.txt            Human-edited top-level deps
+│   ├── requirements.txt            Includes requirements.lock (single source of truth)
 │   ├── requirements.lock           Pinned transitive deps for reproducible builds
 │   ├── graph/
 │   │   ├── graph.py                LangGraph compilation; Send() fan-out wiring
@@ -75,8 +75,9 @@ User → Research → Document → FactCheck (parallel) → Outline →
 ├── frontend/
 │   ├── Dockerfile                  Two-stage: yarn build → nginx
 │   ├── nginx.conf                  SPA routing + SSE-friendly /api proxy
-│   ├── vercel.json                 Production rewrites → Railway backend
-│   ├── package.json                React 19 + Zustand + Tailwind + craco
+│   ├── vercel.json                 Vercel build config (backend URL via VITE_API_BASE_URL)
+│   ├── vite.config.js              Vite config: @ alias + dev /api proxy
+│   ├── package.json                React 19 + Zustand + Tailwind + Vite
 │   └── src/                        App, store, components
 ├── docker-compose.yml              Local-dev Postgres (only)
 ├── railway.toml                    Railway backend deploy config
@@ -135,23 +136,25 @@ The server validates required env vars on startup and creates the
 ```bash
 cd frontend
 yarn install
-yarn start
+yarn dev
 ```
 
-The CRA dev server runs on `http://localhost:3000` and proxies `/api/*`
-to `localhost:8000` via the `proxy` field in `package.json`.
+The Vite dev server runs on `http://localhost:5173` and proxies `/api/*`
+to `localhost:8000` via `server.proxy` in `vite.config.js`.
 
 ### 5. Open the app
 
-Visit `http://localhost:3000`.
+Visit `http://localhost:5173`.
 
 ---
 
 ## Environment Variables
 
-All variables below live in `backend/.env`. The frontend needs none in
-either local dev (handled by CRA proxy) or production (handled by
-`vercel.json` rewrites).
+All variables below live in `backend/.env`. The frontend needs none for
+local dev (the Vite dev proxy handles `/api/*`). Frontend deployments that
+serve the app from a different origin than the backend (Vercel + Railway)
+set `VITE_API_BASE_URL` at build time — see
+`frontend/VERCEL_DEPLOY.md`.
 
 | Variable               | Required | Default                | Description                                                                                                          |
 | ---------------------- | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -188,13 +191,14 @@ either local dev (handled by CRA proxy) or production (handled by
 
 ## Production Deployment — Vercel (Frontend)
 
-1. Edit `frontend/vercel.json` and replace the `destination` URL with
-   your Railway backend URL (`https://<service>.up.railway.app/api/:path*`).
-2. Connect the GitHub repo to Vercel.
-3. In Vercel project settings, set **Root Directory** to `frontend/`.
-4. Deploy. No env vars are required — `vercel.json` rewrites handle
-   API routing.
-5. After deploy, copy the Vercel URL into the Railway `CORS_ORIGINS`
+1. Connect the GitHub repo to Vercel.
+2. In Vercel project settings, set **Root Directory** to `frontend/`.
+3. In Vercel project settings → Environment Variables, set
+   `VITE_API_BASE_URL` to your Railway backend URL
+   (`https://<service>.up.railway.app`) — the backend target is
+   deployment-configurable via env, not hardcoded in `vercel.json`.
+4. Deploy. The frontend calls the backend cross-origin.
+5. Copy the Vercel URL into the Railway `CORS_ORIGINS`
    variable so the backend accepts requests from it.
 
 ---
