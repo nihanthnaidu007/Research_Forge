@@ -624,8 +624,6 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
                     f"{int(GRAPH_RESUME_ITERATION_TIMEOUT)}s for session {session_id}"
                 )
                 logger.error(timeout_msg)
-                if session_id in []:  # always true path
-                    pass
                 existing = await asyncio.to_thread(get_session, session_id)
                 if existing:
                     existing["state"]["error"] = (
