@@ -77,6 +77,11 @@ from auth import (
     require_api_key,
     require_session_ownership,
 )
+from chat import (
+    MAX_CHAT_MESSAGE_CHARS,
+    MAX_TRANSCRIPT_MESSAGES,
+    run_chat_turn,
+)
 from db import cleanup_old_sessions as db_cleanup_sessions
 from db import create_session, get_session, list_sessions, setup_db, update_session
 from eval.langsmith_tracer import (
@@ -206,6 +211,11 @@ class ApproveOutlineRequest(BaseModel):
 
 class UpdateOutlineRequest(BaseModel):
     outline: list[OutlineSection]
+
+
+class ChatRequest(BaseModel):
+    # One chat turn: a single user message, capped at the schema level.
+    message: str = Field(max_length=MAX_CHAT_MESSAGE_CHARS)
 
 
 # ReportSession defines the schema for session metadata.
@@ -1323,6 +1333,114 @@ async def update_outline_endpoint(session_id: str, request: UpdateOutlineRequest
     return {"status": "updated", "outline": updated_state["outline"]}
 
 
+# --- Chat with report (W3) ---
+
+# Retry guidance returned when a chat turn exceeds the per-turn token budget.
+CHAT_BUDGET_RETRY_AFTER_SECONDS = 60
+
+# Chat turns are one section-sized LLM call each; the cap is per client IP.
+CHAT_RATE_LIMIT = "20/minute"
+
+# Per-session chat turns are serialized in-process: the whole `state` JSONB
+# is a read-modify-write blob, so concurrent turns on one session must not
+# interleave read and write. Locks are created on demand and dropped when
+# their session is TTL-cleaned.
+_chat_locks: dict[str, asyncio.Lock] = {}
+_chat_locks_guard = asyncio.Lock()
+
+
+async def _get_chat_lock(session_id: str) -> asyncio.Lock:
+    """Return the per-session chat lock, creating it on first use."""
+    async with _chat_locks_guard:
+        lock = _chat_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _chat_locks[session_id] = lock
+        return lock
+
+
+@api_router.post(
+    "/session/{session_id}/chat",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+@limiter.limit(CHAT_RATE_LIMIT)
+async def chat_with_report(
+    request: Request, session_id: str, chat_request: ChatRequest
+):
+    """
+    Ask a question about a completed report.
+
+    Grounds strictly on the report's own sections, numbered sources, and
+    ingested document chunks — no tools, no fresh retrieval. Fails closed:
+    API key + session ownership, complete-gate, per-session write lock,
+    per-turn token budget, sanitized errors.
+    """
+    message = chat_request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Chat message must not be empty")
+
+    async with await _get_chat_lock(session_id):
+        session = await asyncio.to_thread(get_session, session_id)
+        # 404 unknown / 400 not-complete — the shared export gate.
+        state = _get_completed_session_state(session)
+
+        try:
+            token_budget.ensure_chat_budget(session_id)
+            context_token = token_budget.set_session_context(session_id)
+            try:
+                result = await asyncio.to_thread(run_chat_turn, state, message)
+            finally:
+                token_budget.reset_session_context(context_token)
+        except token_budget.TokenBudgetExceeded:
+            logger.warning(f"Session {session_id}: chat turn exceeded token budget")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "message": (
+                        "This chat turn exceeded the per-turn token budget "
+                        "(CHAT_TOKEN_BUDGET). Shorten the question or raise the limit."
+                    ),
+                    "retry_after_seconds": CHAT_BUDGET_RETRY_AFTER_SECONDS,
+                },
+                headers={"Retry-After": str(CHAT_BUDGET_RETRY_AFTER_SECONDS)},
+            ) from None
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Client-visible error is generic plus a short reference; raw
+            # exception text stays in the server log only.
+            error_ref = uuid.uuid4().hex[:8]
+            logger.error(
+                f"Chat turn error for session {session_id} [ref {error_ref}]: {e}"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Chat failed due to an internal error. Reference: {error_ref}.",
+            ) from e
+        finally:
+            # The budget is per turn — release it however the turn ends, so an
+            # exhausted turn cannot poison the next one on the same session.
+            token_budget.release_chat_budget(session_id)
+
+        # Persist the turn on the session's transcript, capped so stored
+        # state cannot grow unboundedly with the conversation.
+        timestamp = datetime.now(timezone.utc).isoformat()
+        transcript = list(state.get("chat_messages") or [])
+        transcript.append({"role": "user", "content": message, "ts": timestamp})
+        transcript.append(
+            {"role": "assistant", "content": result["answer"], "ts": timestamp}
+        )
+        state["chat_messages"] = transcript[-MAX_TRANSCRIPT_MESSAGES:]
+        await asyncio.to_thread(update_session, session_id, {"state": state})
+
+    return {
+        "answer": result["answer"],
+        "resolved_citations": result["resolved_citations"],
+        "unresolved_citations": result["unresolved_citations"],
+        "usage": result["usage"],
+    }
+
+
 # --- Include router and middleware ---
 app.include_router(api_router)
 
@@ -1440,6 +1558,7 @@ def _cleanup_sessions_and_files() -> None:
 
         # Delete generated report PDF if it exists
         session_id = session_info["id"]
+        _chat_locks.pop(session_id, None)
         pdf_dir = Path("/tmp/researchforge_pdfs")
         for pdf_file in pdf_dir.glob(f"researchforge-*-{session_id[:8]}.pdf"):
             try:
