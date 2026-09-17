@@ -27,7 +27,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -78,12 +78,13 @@ from auth import (
     require_session_ownership,
 )
 from db import cleanup_old_sessions as db_cleanup_sessions
-from db import create_session, get_session, setup_db, update_session
+from db import create_session, get_session, list_sessions, setup_db, update_session
 from eval.langsmith_tracer import (
     get_trace_url,
     is_tracing_enabled,
     setup_tracing,
 )
+from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
 from utils import token_budget
@@ -200,6 +201,10 @@ class ApproveOutlineRequest(BaseModel):
     session_id: str
     outline: list[OutlineSection]
     edits: str | None = None
+
+
+class UpdateOutlineRequest(BaseModel):
+    outline: list[OutlineSection]
 
 
 # ReportSession defines the schema for session metadata.
@@ -795,6 +800,21 @@ async def get_session_endpoint(session_id: str):
     return session
 
 
+@api_router.get("/history", dependencies=[Depends(require_api_key)])
+async def list_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    List past report sessions, newest first (history dashboard).
+
+    Operator-level listing behind the API key. Returns metadata only —
+    no report state and no token material.
+    """
+    sessions = await asyncio.to_thread(list_sessions, limit, offset)
+    return {"count": len(sessions), "sessions": sessions}
+
+
 @api_router.get(
     "/session/{session_id}/stream",
     dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
@@ -1050,13 +1070,21 @@ async def upload_pdf(
     }
 
 
-@api_router.post(
-    "/export-pdf",
-    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
-)
-async def export_pdf_endpoint(session_id: str):
-    """Export completed report as a styled PDF and return it as a file download"""
-    session = await asyncio.to_thread(get_session, session_id)
+def _export_attachment_filename(topic: str, session_id: str, ext: str) -> str:
+    """Build a safe download filename: researchforge-<topic-slug>-<id8>.<ext>."""
+    safe_topic = topic[:40]
+    safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in safe_topic)
+    safe_topic = safe_topic.strip().replace(" ", "-").lower()
+    return f"researchforge-{safe_topic}-{session_id[:8]}.{ext}"
+
+
+def _get_completed_session_state(session: dict | None) -> dict:
+    """
+    Validate a session as a completed report and return its state.
+
+    Raises 404 for unknown sessions and 400 when the report is not finished
+    or carries no written sections. Shared by every export endpoint.
+    """
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1072,6 +1100,17 @@ async def export_pdf_endpoint(session_id: str):
         raise HTTPException(
             status_code=400, detail="No written sections found in report"
         )
+    return state
+
+
+@api_router.post(
+    "/export-pdf",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_pdf_endpoint(session_id: str):
+    """Export completed report as a styled PDF and return it as a file download"""
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
 
     try:
         from export.pdf_exporter import export_report_to_pdf
@@ -1081,10 +1120,7 @@ async def export_pdf_endpoint(session_id: str):
         pdf_dir.mkdir(exist_ok=True)
 
         # Safe filename from topic
-        safe_topic = state.get("topic", "report")[:40]
-        safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in safe_topic)
-        safe_topic = safe_topic.strip().replace(" ", "-").lower()
-        filename = f"researchforge-{safe_topic}-{session_id[:8]}.pdf"
+        filename = _export_attachment_filename(state.get("topic", "report"), session_id, "pdf")
         output_path = str(pdf_dir / filename)
 
         # Generate PDF in thread to avoid blocking event loop
@@ -1110,6 +1146,106 @@ async def export_pdf_endpoint(session_id: str):
             status_code=500,
             detail="PDF generation failed — check server logs for details",
         ) from e
+
+
+@api_router.post(
+    "/export-markdown",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_markdown_endpoint(session_id: str):
+    """Export completed report as Markdown and return it as a file download."""
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        markdown = await asyncio.to_thread(build_markdown_report, state)
+    except ValueError as e:
+        logger.error(
+            f"Markdown export validation error for session {session_id}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=400, detail="Markdown export failed — invalid report state"
+        ) from e
+
+    filename = _export_attachment_filename(state.get("topic", "report"), session_id, "md")
+    logger.info(f"Markdown exported for session {session_id}")
+
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post(
+    "/export-html",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_html_endpoint(session_id: str):
+    """Export completed report as a standalone HTML file download."""
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        html = await asyncio.to_thread(build_html_report, state)
+    except ValueError as e:
+        logger.error(
+            f"HTML export validation error for session {session_id}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=400, detail="HTML export failed — invalid report state"
+        ) from e
+
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, "html"
+    )
+    logger.info(f"HTML exported for session {session_id}")
+
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.put(
+    "/session/{session_id}/outline",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def update_outline_endpoint(session_id: str, request: UpdateOutlineRequest):
+    """
+    Replace the outline of a session that is waiting for approval.
+
+    Lets the operator edit section titles/descriptions/order before resuming
+    synthesis. The session stays in waiting_approval — the existing approval
+    gate remains responsible for resuming the graph with the edited outline.
+    """
+    session = await asyncio.to_thread(get_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("status") != "waiting_approval":
+        raise HTTPException(
+            status_code=400,
+            detail="Outline can only be edited while the report is waiting for approval",
+        )
+
+    if not request.outline:
+        raise HTTPException(status_code=400, detail="Outline must not be empty")
+
+    updated_state = session.get("state", {})
+    updated_state["outline"] = sorted(
+        (s.model_dump() for s in request.outline), key=lambda s: s["order"]
+    )
+
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    updated_state.setdefault("stream_updates", []).append(
+        f"[{timestamp}] Outline edited before approval: {len(request.outline)} sections"
+    )
+
+    await asyncio.to_thread(update_session, session_id, {"state": updated_state})
+
+    return {"status": "updated", "outline": updated_state["outline"]}
 
 
 # --- Include router and middleware ---
