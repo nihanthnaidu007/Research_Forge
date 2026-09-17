@@ -80,6 +80,13 @@ class Source(BaseModel):
     year: int | None = None
     venue: str = ""
     persistent_ids: dict[str, str] = Field(default_factory=dict)
+    snippet: str = ""
+    # Citation-integrity metadata (W2): attached by the citation-integrity
+    # pass. Defaults keep pre-W2 checkpoints and stored reports loading
+    # cleanly — "unknown" is the honest default, never a guess.
+    integrity_status: str = "unknown"  # verified | retracted | unresolved | unknown
+    retracted: bool = False
+    citation_count: int | None = None
 
 
 class DocumentChunk(BaseModel):

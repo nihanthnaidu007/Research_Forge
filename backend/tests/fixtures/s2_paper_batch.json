@@ -1,0 +1,18 @@
+[
+  {
+    "paperId": "5c5751d45e298cea054f32b392c12c61027d2fe7",
+    "externalIds": {
+      "MAG": "3015453090",
+      "DBLP": "conf/acl/LoWNKW20",
+      "ACL": "2020.acl-main.447",
+      "DOI": "10.5555/3295222.3295349",
+      "CorpusId": 215416146
+    },
+    "url": "https://www.semanticscholar.org/paper/5c5751d45e298cea054f32b392c12c61027d2fe7",
+    "title": "Construction of the Literature Graph in Semantic Scholar",
+    "venue": "Annual Meeting of the Association for Computational Linguistics",
+    "year": 2018,
+    "citationCount": 453
+  },
+  null
+]

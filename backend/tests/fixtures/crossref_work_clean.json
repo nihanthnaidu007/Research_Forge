@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "message-type": "work",
+  "message": {
+    "DOI": "10.1145/3442188.3445922",
+    "title": ["Decentralized Online Active Learning"],
+    "type": "proceedings-article",
+    "issued": { "date-parts": [[2021, 4]] },
+    "relation": {}
+  }
+}

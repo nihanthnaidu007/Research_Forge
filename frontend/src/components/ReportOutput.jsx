@@ -1,6 +1,17 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, ExternalLink, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import {
+  FileText,
+  ExternalLink,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  ShieldCheck,
+  AlertTriangle,
+  HelpCircle,
+  SearchX,
+  X,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 
 function getConfidenceLevel(score) {
@@ -73,7 +84,194 @@ function ConfidenceBar({ score }) {
   );
 }
 
-export function ReportSection({ section, confidence, index, totalSections, versioningReport }) {
+/*
+ * Citation-integrity presentation (W2). Statuses come from the backend's
+ * S2/Crossref enrichment and are shown as-is — the UI never guesses.
+ */
+const INTEGRITY_META = {
+  verified: {
+    label: 'VERIFIED',
+    icon: ShieldCheck,
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-400',
+    border: 'border-emerald-500/25',
+  },
+  unresolved: {
+    label: 'UNRESOLVED',
+    icon: SearchX,
+    bg: 'bg-amber-500/10',
+    text: 'text-amber-400',
+    border: 'border-amber-500/25',
+  },
+  unknown: {
+    label: 'UNKNOWN',
+    icon: HelpCircle,
+    bg: 'bg-zinc-500/10',
+    text: 'text-zinc-400',
+    border: 'border-zinc-500/25',
+  },
+  retracted: {
+    label: 'RETRACTED',
+    icon: AlertTriangle,
+    bg: 'bg-rose-500/10',
+    text: 'text-rose-400',
+    border: 'border-rose-500/25',
+  },
+};
+
+function getIntegrityStatus(source) {
+  if (!source || source.retracted) return 'retracted';
+  const status = source.integrity_status;
+  return status && INTEGRITY_META[status] ? status : 'unknown';
+}
+
+function IntegrityChip({ source }) {
+  const status = getIntegrityStatus(source);
+  const { label, icon: Icon, bg, text, border } = INTEGRITY_META[status];
+
+  return (
+    <div
+      className={cn(
+        'flex items-center gap-1.5 px-2 py-0.5 rounded-sm border font-mono text-[10px]',
+        bg,
+        text,
+        border
+      )}
+      data-testid={`integrity-chip-${status}`}
+    >
+      <Icon className="w-3 h-3" />
+      <span className="uppercase tracking-wider">{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Split section content into text runs and inline citation markers.
+ * The backend has already rewritten [source: url] into bare [n] markers,
+ * so the frontend only needs to find them — pure function, unit-tested.
+ */
+export function splitCitationContent(content) {
+  const parts = [];
+  const regex = /\[(\d+)\]/g;
+  let last = 0;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > last) {
+      parts.push({ type: 'text', value: content.slice(last, match.index) });
+    }
+    parts.push({ type: 'citation', number: parseInt(match[1], 10) });
+    last = match.index + match[0].length;
+  }
+  if (last < content.length) {
+    parts.push({ type: 'text', value: content.slice(last) });
+  }
+  return parts;
+}
+
+function CitationPanel({ source, number, onClose }) {
+  const status = getIntegrityStatus(source);
+  const hasSnippet = source && source.snippet && source.snippet.trim() !== '';
+
+  return (
+    <div
+      data-testid="citation-panel"
+      className="mt-4 p-4 rounded-sm bg-zinc-900/60 border border-zinc-800"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-sm bg-cyan-500/10 text-xs font-mono text-cyan-400 border border-cyan-500/25">
+            {number}
+          </span>
+          <IntegrityChip source={source} />
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close citation panel"
+          className="text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {source ? (
+        <>
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block mt-3 text-sm font-medium text-cyan-400 hover:text-cyan-300 hover:underline"
+          >
+            {source.title}
+          </a>
+          <span className="text-xs font-mono text-zinc-600">{source.domain}</span>
+
+          {hasSnippet ? (
+            <p
+              data-testid="citation-snippet"
+              className="mt-3 text-sm text-zinc-400 italic leading-relaxed border-l-2 border-zinc-700 pl-3"
+            >
+              {source.snippet}
+            </p>
+          ) : (
+            <p
+              data-testid="citation-snippet-empty"
+              className="mt-3 text-xs text-zinc-600 italic"
+            >
+              No snippet recorded for this source.
+            </p>
+          )}
+
+          <div className="flex items-center gap-3 mt-3 text-xs text-zinc-500">
+            {typeof source.citation_count === 'number' ? (
+              <span data-testid="citation-count">
+                {source.citation_count.toLocaleString()} citations
+              </span>
+            ) : (
+              <span>Citation count unavailable</span>
+            )}
+          </div>
+
+          {status === 'retracted' && (
+            <p
+              data-testid="retraction-warning"
+              className="mt-3 flex items-center gap-2 text-xs text-rose-400"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              This source has been retracted — do not rely on its claims.
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-zinc-500">
+          No source record for citation [{number}].
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function ReportSection({
+  section,
+  confidence,
+  index,
+  totalSections,
+  versioningReport,
+  sources,
+}) {
+  // Component-local state — no state library; only one panel open at a time.
+  const [activeCitation, setActiveCitation] = useState(null);
+
+  const sourceByNumber = useMemo(() => {
+    const map = new Map();
+    (sources || []).forEach((s) => {
+      if (typeof s.citation_number === 'number') map.set(s.citation_number, s);
+    });
+    return map;
+  }, [sources]);
+
+  const contentParts = splitCitationContent(section.content || '');
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -138,9 +336,37 @@ export function ReportSection({ section, confidence, index, totalSections, versi
         {/* Content */}
         <div className="prose prose-invert prose-sm max-w-none">
           <p className="text-zinc-300 leading-relaxed whitespace-pre-wrap">
-            {section.content}
+            {contentParts.map((part, partIndex) =>
+              part.type === 'text' ? (
+                <React.Fragment key={partIndex}>{part.value}</React.Fragment>
+              ) : (
+                <button
+                  key={partIndex}
+                  type="button"
+                  onClick={() => setActiveCitation(part.number)}
+                  aria-label={`Show citation ${part.number}`}
+                  className={cn(
+                    'inline-flex items-baseline justify-center min-w-[1.6rem] px-1 mx-0.5 rounded-sm border font-mono text-xs align-super transition-colors',
+                    activeCitation === part.number
+                      ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
+                      : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/25 hover:bg-cyan-500/20 hover:text-cyan-300'
+                  )}
+                >
+                  {part.number}
+                </button>
+              )
+            )}
           </p>
         </div>
+
+        {/* Interactive citation panel (W2) */}
+        {activeCitation !== null && (
+          <CitationPanel
+            source={sourceByNumber.get(activeCitation)}
+            number={activeCitation}
+            onClose={() => setActiveCitation(null)}
+          />
+        )}
         
         {/* Footer */}
         <div className="flex items-center gap-4 mt-4 pt-4 border-t border-zinc-800/50">
@@ -203,6 +429,7 @@ export function ReportOutput({
             index={index}
             totalSections={writtenSections.length}
             versioningReport={versioningReport}
+            sources={sources}
           />
         ))}
       </div>
@@ -236,7 +463,10 @@ export function ReportOutput({
                   >
                     {source.title}
                   </a>
-                  <span className="text-xs text-zinc-600">{source.domain}</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-zinc-600">{source.domain}</span>
+                    <IntegrityChip source={source} />
+                  </div>
                 </div>
                 <ExternalLink className="w-3.5 h-3.5 text-zinc-600 flex-shrink-0" />
               </div>
