@@ -247,6 +247,25 @@ Configuration lives at `.ruff.toml` at the repo root.
 
 ---
 
+## Security Notes
+
+Two accepted design tradeoffs, documented deliberately (no code change is
+planned in this pass):
+
+- **Session tokens in query parameters**: `/api/session/{id}/stream` (SSE) and
+  the PDF download routes accept the session token as a query parameter
+  (`?token=...`) because `EventSource` and plain download links cannot set
+  request headers. The consequence: tokens can appear in access logs and any
+  intermediary that records full URLs. Accepted for now; mitigations if needed
+  later are log hygiene (never log query strings) and short-lived tokens.
+- **API key in `localStorage`**: the frontend stores the API key in
+  `localStorage` (`rf_api_key`) so users do not re-enter it per session. Any
+  successful XSS on the frontend can read it. This is a documented design
+  choice — the alternative (session-only storage) costs UX for a threat most
+  deployments accept.
+
+---
+
 ## Tech Stack
 
 | Layer              | Technology                       | Version    |
