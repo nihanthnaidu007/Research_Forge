@@ -26,12 +26,14 @@ def build_citation_list(
     deduplicate, and assign citation numbers.
     If no inline citations found, use research results directly.
     """
-    # Build URL to title mapping from research results
-    url_to_title = {}
+    # Build URL to result mapping from research results — provenance and
+    # persistent identifiers travel from the retrieval source into the
+    # citation record so every citation stays traceable to where it came from.
+    url_to_result = {}
     for r in research_results:
         url = r.get("url", "")
         if url:
-            url_to_title[url] = r.get("title", "Unknown Source")
+            url_to_result[url] = r
 
     # Preserve order of first appearance — do not sort alphabetically
     seen_urls_ordered = []
@@ -66,12 +68,19 @@ def build_citation_list(
     citations = []
     citation_number = 1
     for url in seen_urls_ordered:
+        result = url_to_result.get(url, {})
         citations.append(
             {
                 "url": url,
-                "title": url_to_title.get(url, "External Source"),
+                "title": result.get("title", "External Source") or "External Source",
                 "domain": extract_domain(url),
                 "citation_number": citation_number,
+                "source_type": result.get("source_type", "web"),
+                "source_api": result.get("source_api", ""),
+                "authors": result.get("authors", []) or [],
+                "year": result.get("year"),
+                "venue": result.get("venue", "") or "",
+                "persistent_ids": result.get("persistent_ids") or {},
             }
         )
         citation_number += 1

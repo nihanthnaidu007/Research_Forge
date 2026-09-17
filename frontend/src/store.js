@@ -439,7 +439,7 @@ export const useStore = create((set, get) => ({
   },
 
   exportReport: async (format) => {
-    // format: 'pdf' | 'markdown' | 'html'
+    // format: 'pdf' | 'markdown' | 'html' | 'docx' | 'bibtex'
     const { sessionId, sessionToken } = get();
     if (!sessionId || !sessionToken) {
       throw new Error('No active session to export');
@@ -456,9 +456,10 @@ export const useStore = create((set, get) => ({
       throw new Error(errData.detail || `Export failed (${response.status})`);
     }
 
+    const fallbackExt = format === 'markdown' ? 'md' : format === 'bibtex' ? 'bib' : format;
     return downloadResponseAsFile(
       response,
-      `researchforge-report.${format === 'markdown' ? 'md' : format}`
+      `researchforge-report.${fallbackExt}`
     );
   },
 

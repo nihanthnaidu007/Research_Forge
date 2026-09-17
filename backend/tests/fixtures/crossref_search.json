@@ -1,0 +1,30 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message": {
+    "items-per-page": 2,
+    "total-results": 2,
+    "items": [
+      {
+        "DOI": "10.1038/s41586-021-03819-2",
+        "URL": "https://doi.org/10.1038/s41586-021-03819-2",
+        "title": ["Highly accurate protein structure prediction with AlphaFold"],
+        "abstract": "<p>AlphaFold presents a revolution in protein structure prediction.</p>",
+        "author": [
+          {"given": "John", "family": "Jumper"},
+          {"given": "Richard", "family": "Evans"}
+        ],
+        "issued": {"date-parts": [[2021, 7, 15]]},
+        "container-title": ["Nature"]
+      },
+      {
+        "DOI": "10.1000/no-venue-doi",
+        "URL": "https://doi.org/10.1000/no-venue-doi",
+        "title": ["A Work Without Venue"],
+        "author": [],
+        "issued": {"date-parts": [[2023]]},
+        "container-title": []
+      }
+    ]
+  }
+}
