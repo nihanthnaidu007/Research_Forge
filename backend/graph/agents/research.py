@@ -14,7 +14,7 @@ from scholarly.merge import (
     merge_scholarly_and_web_results,
 )
 
-from graph.state import ReportState
+from graph.state import ReportState, without_parallel_fact_results
 from utils.clients import get_tavily_client
 from utils.url_utils import extract_domain
 
@@ -242,11 +242,11 @@ def research_node(state: ReportState) -> ReportState:
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
 
-        return state
+        return without_parallel_fact_results(state)
 
     except Exception as e:
         error_msg = f"[{timestamp}] Research Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)
         state["error"] = str(e)
         logger.error(error_msg)
-        return state
+        return without_parallel_fact_results(state)

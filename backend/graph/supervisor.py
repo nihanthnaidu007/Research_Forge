@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
+from graph.state import without_parallel_fact_results
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -380,7 +382,7 @@ def supervisor_node(state: dict) -> dict:
         state["stream_updates"].append(update_msg)
         logger.info(update_msg)
 
-        return state
+        return without_parallel_fact_results(state)
 
     except Exception as e:
         error_msg = f"[{timestamp}] ✗ Supervisor error: {str(e)}"
@@ -388,4 +390,4 @@ def supervisor_node(state: dict) -> dict:
         state["error"] = str(e)
         state["next_agent"] = "END"
         logger.error(error_msg)
-        return state
+        return without_parallel_fact_results(state)

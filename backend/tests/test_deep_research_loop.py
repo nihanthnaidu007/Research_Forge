@@ -13,6 +13,7 @@ import server
 from conftest import API_KEY_HEADERS, FakeGraph, seed_session
 
 from graph import supervisor
+from graph.agents import synthesis
 from graph.state import create_initial_state
 from utils import token_budget
 
@@ -458,3 +459,59 @@ def test_chat_registry_isolated_from_round_accounting():
         token_budget.release_budget("sess-iso")
         token_budget.release_round_budget("sess-iso")
         token_budget.release_chat_budget("sess-iso")
+
+
+# --- Accumulator channel bounds (OOM regression) ---
+#
+# parallel_fact_check_results is the graph's only operator.add channel:
+# whatever a node returns is concatenated onto the accumulated value.
+# Nodes that returned the FULL state re-added the whole list every
+# superstep — 2^N growth (measured: 524,288 elements ≈ 100 MB per persist)
+# that OOM-killed real runs once the W4 loop pushed superstep counts past
+# ~19. Node returns must omit the accumulator; only the factcheck_single
+# Send() burst emits it, always as a one-element delta.
+
+
+def _add_applied(accumulated, returned):
+    """Mimic LangGraph's operator.add channel application.
+
+    The channel value persists across supersteps; a node return only
+    contributes when it carries the key. A return without the key adds
+    nothing (which is exactly the invariant the fix establishes).
+    """
+    added = returned.get("parallel_fact_check_results")
+    if added is None:
+        return accumulated
+    return list(accumulated) + list(added)
+
+
+def test_supervisor_node_return_omits_parallel_accumulator():
+    state = _full_state(parallel_fact_check_results=[{"verdict": "SUPPORTED"}])
+    result = supervisor.supervisor_node(dict(state))
+    assert "parallel_fact_check_results" not in result
+
+
+def test_synthesis_node_return_omits_parallel_accumulator():
+    # current_section_index past the outline takes the early return
+    # without any LLM call.
+    state = _full_state(
+        current_section_index=99,
+        parallel_fact_check_results=[{"verdict": "SUPPORTED"}],
+    )
+    result = synthesis.synthesis_node(state)
+    assert "parallel_fact_check_results" not in result
+
+
+def test_repeated_supersteps_never_grow_accumulator():
+    # 25 synthesis-class supersteps: pre-fix this grew the accumulator to
+    # 2^25 elements (OOM at ~2^19). The channel must never gain entries
+    # from a node that does not run fact-checks.
+    state = _full_state(
+        current_section_index=99,
+        parallel_fact_check_results=[{"verdict": "SUPPORTED"}],
+    )
+    accumulated = list(state["parallel_fact_check_results"])
+    for _ in range(25):
+        returned = synthesis.synthesis_node(state)
+        accumulated = _add_applied(accumulated, returned)
+    assert len(accumulated) == 1

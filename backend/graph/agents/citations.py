@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.agents.citation_integrity import enrich_citations_with_integrity
-from graph.state import ReportState
+from graph.state import ReportState, without_parallel_fact_results
 from utils.url_utils import extract_domain
 
 load_dotenv()
@@ -154,9 +154,7 @@ def citations_node(state: ReportState) -> ReportState:
         sources = enrich_citations_with_integrity(sources)
         state["sources"] = sources
 
-        verified = sum(
-            1 for s in sources if s.get("integrity_status") == "verified"
-        )
+        verified = sum(1 for s in sources if s.get("integrity_status") == "verified")
         retracted = sum(1 for s in sources if s.get("retracted"))
 
         # Replace inline citations
@@ -184,11 +182,11 @@ def citations_node(state: ReportState) -> ReportState:
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
 
-        return state
+        return without_parallel_fact_results(state)
 
     except Exception as e:
         error_msg = f"[{timestamp}] Citations Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)
         state["error"] = str(e)
         logger.error(error_msg)
-        return state
+        return without_parallel_fact_results(state)

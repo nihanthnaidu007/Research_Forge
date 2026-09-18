@@ -182,6 +182,19 @@ class ReportState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+def without_parallel_fact_results(state: ReportState) -> ReportState:
+    """Node-return view that omits the Send()-accumulator channel.
+
+    parallel_fact_check_results uses operator.add: whatever a node returns is
+    concatenated onto the accumulated channel value. Nodes that return the
+    full state therefore re-add the whole list every superstep — 2^N growth
+    that OOM-killed long runs once the W4 loop pushed superstep counts past
+    ~19 (524,288 elements ≈ 100 MB per persist). Only the factcheck_single
+    Send() burst may emit this key, always as a one-element delta.
+    """
+    return {k: v for k, v in state.items() if k != "parallel_fact_check_results"}
+
+
 def create_initial_state(
     topic: str,
     depth: str = "quick",
