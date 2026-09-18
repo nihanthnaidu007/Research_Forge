@@ -69,6 +69,14 @@ const initialState = {
   steerInFlight: null,
   steerAck: null,
   steerError: null,
+  // Report reopen (R1): clicking a history row restores the persisted
+  // report as the live view. Restores are read-only — the session token
+  // was returned exactly once at run time and is never stored, so
+  // token-gated actions (outline approval, steering, chat, exports) stay
+  // unavailable and the UI says so instead of letting a click 401.
+  sessionRestored: false,
+  reopenLoading: false,
+  reopenError: null,
 };
 
 export const useStore = create((set, get) => ({
@@ -132,6 +140,11 @@ export const useStore = create((set, get) => ({
       completedAgents: [],
       traceUrl: null,
       agentStats: { sourcesFound: 0, claimsChecked: 0, sectionsWritten: 0, totalSections: 0 },
+      researchRounds: 0,
+      coverageGaps: [],
+      factCheckResults: [],
+      sessionRestored: false,
+      reopenError: null,
       isLoading: true,
     });
 
@@ -486,6 +499,97 @@ export const useStore = create((set, get) => ({
     } catch (err) {
       console.error('History load error:', err);
       set({ historyError: err.message, historyLoading: false });
+    }
+  },
+
+  // Report reopen (R1): a history row click restores the persisted
+  // session as the live view — sections, verdicts, citations, transcript.
+  // GET /api/session/{id} needs only the operator API key, so the restore
+  // is token-free by design; token-gated actions stay unavailable and the
+  // UI states that instead of letting the user hit a 401. Completed
+  // reports restore fully; other statuses answer with an honest message —
+  // a live run cannot be re-attached without the one-time session token.
+  openSession: async (sessionId) => {
+    if (!sessionId || get().reopenLoading) return;
+
+    // Stop any live transport BEFORE swapping state: a poll or stream for
+    // the previous session must never write into the restored view.
+    if (_polling.intervalId) {
+      clearTimeout(_polling.intervalId);
+      _polling.intervalId = null;
+    }
+
+    set({ reopenLoading: true, reopenError: null });
+
+    try {
+      const response = await fetch(apiUrl(`/api/session/${sessionId}`), {
+        headers: authHeaders(),
+      });
+
+      if (response.status === 404) {
+        set({
+          reopenLoading: false,
+          reopenError: 'That report is no longer available — it may have expired.',
+        });
+        return;
+      }
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Failed to reopen report (${response.status})`);
+      }
+
+      const data = await response.json();
+      const persisted = data.state || {};
+
+      if (data.status !== 'complete') {
+        set({
+          reopenLoading: false,
+          reopenError:
+            data.status === 'error'
+              ? 'That report failed during generation — nothing to reopen.'
+              : 'Only completed reports can be reopened. This one is still ' +
+                `${(data.status || 'unknown').replace('_', ' ')}.`,
+        });
+        return;
+      }
+
+      set({
+        sessionId: data.id,
+        sessionToken: null, // returned exactly once at run time — never restorable
+        sessionRestored: true,
+        status: 'complete',
+        topic: data.topic || get().topic,
+        streamUpdates: persisted.stream_updates || [],
+        writtenSections: persisted.written_sections || [],
+        sources: persisted.sources || [],
+        confidenceScores: persisted.confidence_scores || {},
+        overallConfidence: persisted.overall_confidence || 0,
+        factCheckResults: persisted.fact_check_results || [],
+        coverageGaps: persisted.coverage_gaps || [],
+        researchRounds: persisted.research_rounds || 0,
+        outline: persisted.approved_outline || persisted.outline || [],
+        approvedOutline: persisted.approved_outline || [],
+        outlineApproved: true,
+        versioning_report: data.versioning_report || null,
+        chatMessages: (persisted.chat_messages || []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          ts: m.ts,
+        })),
+        // Chat transcript renders read-only on a restored report.
+        chatSessionExpired: false,
+        chatError: null,
+        chatLoading: false,
+        currentAgent: '',
+        completedAgents: persisted.completed_agents || [],
+        error: null,
+        isLoading: false,
+        traceUrl: data.trace_url || null,
+        reopenLoading: false,
+      });
+    } catch (err) {
+      console.error('Reopen report error:', err);
+      set({ reopenLoading: false, reopenError: err.message || 'Failed to reopen report' });
     }
   },
 

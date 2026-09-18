@@ -42,6 +42,8 @@ function App() {
     steerAck,
     steerError,
     sendSteerCommand,
+    // R1 reopen
+    sessionRestored,
     // Actions
     startReport,
     resetReport,
