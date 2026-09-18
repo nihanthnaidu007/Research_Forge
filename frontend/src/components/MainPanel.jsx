@@ -133,7 +133,7 @@ const EXPORT_FORMATS = [
   { format: 'latex', label: 'LaTeX', icon: Braces, testid: 'download-latex-btn' },
 ];
 
-function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport, restored }) {
+function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport, restored, factCheckResults }) {
   const [exportLoading, setExportLoading] = useState(null); // format id
   const [exportError, setExportError] = useState(null);
 
@@ -202,6 +202,7 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
         sources={sources}
         overallConfidence={overallConfidence}
         versioningReport={versioningReport}
+        factCheckResults={factCheckResults}
       />
 
       {/* Chat lives beside the report — the only state where the report
@@ -242,6 +243,8 @@ export function MainPanel({
   researchRounds,
   // R1 reopen: restored reports render read-only
   sessionRestored,
+  // R2 fact-check verdicts
+  factCheckResults,
 }) {
   const renderContent = () => {
     // Error state — check first so errors always show
@@ -320,6 +323,7 @@ export function MainPanel({
           versioningReport={versioningReport}
           onExport={onExport}
           restored={sessionRestored}
+          factCheckResults={factCheckResults}
         />
       );
     }

@@ -28,6 +28,7 @@ function App() {
     confidenceScores,
     sources,
     overallConfidence,
+    factCheckResults,
     agentStats,
     error,
     traceUrl,
@@ -109,6 +110,7 @@ function App() {
           confidenceScores={confidenceScores}
           sources={sources}
           overallConfidence={overallConfidence}
+          factCheckResults={factCheckResults}
           error={error}
           onReset={resetReport}
           versioningReport={versioning_report}

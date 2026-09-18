@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import VerdictPanel from './VerdictPanel';
 
 function getConfidenceLevel(score) {
   if (score >= 0.85) return 'high';
@@ -393,7 +394,8 @@ export function ReportOutput({
   confidenceScores, 
   sources, 
   overallConfidence,
-  versioningReport 
+  versioningReport,
+  factCheckResults,
 }) {
   if (!writtenSections || writtenSections.length === 0) return null;
   
@@ -436,6 +438,9 @@ export function ReportOutput({
         ))}
       </div>
       
+      {/* Fact-check verdicts (R2): persisted per-claim results */}
+      <VerdictPanel results={factCheckResults} />
+
       {/* Citations */}
       {sources && sources.length > 0 && (
         <motion.div
