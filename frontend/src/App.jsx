@@ -28,6 +28,8 @@ function App() {
     confidenceScores,
     sources,
     overallConfidence,
+    factCheckResults,
+    coverageGaps,
     agentStats,
     error,
     traceUrl,
@@ -42,6 +44,8 @@ function App() {
     steerAck,
     steerError,
     sendSteerCommand,
+    // R1 reopen
+    sessionRestored,
     // Actions
     startReport,
     resetReport,
@@ -107,6 +111,8 @@ function App() {
           confidenceScores={confidenceScores}
           sources={sources}
           overallConfidence={overallConfidence}
+          factCheckResults={factCheckResults}
+          coverageGaps={coverageGaps}
           error={error}
           onReset={resetReport}
           versioningReport={versioning_report}

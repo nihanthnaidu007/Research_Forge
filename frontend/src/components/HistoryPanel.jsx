@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { History, RefreshCw, AlertTriangle, FileText, Search } from 'lucide-react';
+import { History, RefreshCw, AlertTriangle, FileText, Search, RotateCcw } from 'lucide-react';
 import { useStore } from '../store';
 
 const STATUS_STYLES = {
@@ -32,18 +32,24 @@ function StatusChip({ status }) {
   );
 }
 
-function HistoryRow({ entry }) {
+function HistoryRow({ entry, onOpen, disabled }) {
   const created = entry.created_at ? new Date(entry.created_at) : null;
   const when = created
     ? created.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
       ' ' +
       created.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
     : '—';
+  const reopenable = entry.status === 'complete';
 
   return (
-    <div
-      className="p-3 rounded-sm bg-zinc-900/30 border border-zinc-800 hover:border-zinc-700 transition-colors"
+    <button
+      type="button"
+      className="w-full text-left p-3 rounded-sm bg-zinc-900/30 border border-zinc-800 hover:border-cyan-500/40 hover:bg-zinc-900/60 transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-60"
       data-testid="history-row"
+      data-testid-status={entry.status}
+      onClick={() => onOpen(entry.id)}
+      disabled={disabled}
+      aria-label={`Reopen report: ${entry.topic || 'Untitled report'}`}
     >
       <div className="flex items-center justify-between gap-2 mb-1">
         <div className="flex items-center gap-2 min-w-0">
@@ -58,8 +64,14 @@ function HistoryRow({ entry }) {
         <span>{when}</span>
         <span>·</span>
         <span>{entry.depth || 'quick'}</span>
+        {reopenable && (
+          <span className="flex items-center gap-1 ml-auto text-cyan-500/70">
+            <RotateCcw className="w-3 h-3" strokeWidth={1.5} />
+            Reopen
+          </span>
+        )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -68,6 +80,9 @@ export function HistoryPanel() {
   const historyLoading = useStore((s) => s.historyLoading);
   const historyError = useStore((s) => s.historyError);
   const fetchHistory = useStore((s) => s.fetchHistory);
+  const openSession = useStore((s) => s.openSession);
+  const reopenLoading = useStore((s) => s.reopenLoading);
+  const reopenError = useStore((s) => s.reopenError);
 
   // Topic search (W5): debounced server-side query. While searching, the
   // 8-row display cap is lifted — hiding server-filtered matches behind a
@@ -123,6 +138,17 @@ export function HistoryPanel() {
         </div>
       )}
 
+      {reopenError && (
+        <div
+          className="flex items-center gap-2 p-2 rounded-sm bg-amber-500/5 border border-amber-500/20"
+          data-testid="reopen-error"
+          role="status"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+          <span className="text-xs text-amber-400">{reopenError}</span>
+        </div>
+      )}
+
       {!historyLoading && !historyError && history.length === 0 && (
         <p className="text-xs text-zinc-600 px-1">
           {searching ? 'No matching reports.' : 'No reports yet.'}
@@ -131,7 +157,12 @@ export function HistoryPanel() {
 
       <div className="space-y-2">
         {visible.map((entry) => (
-          <HistoryRow key={entry.id} entry={entry} />
+          <HistoryRow
+            key={entry.id}
+            entry={entry}
+            onOpen={openSession}
+            disabled={reopenLoading}
+          />
         ))}
       </div>
 

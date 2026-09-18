@@ -12,6 +12,7 @@ import { Label } from './ui/label';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 import AgentStatusPanel from './AgentStatus';
 import HistoryPanel from './HistoryPanel';
+import CitationLibrary from './CitationLibrary';
 
 function StatCard({ icon: Icon, label, value, subtext }) {
   return (
@@ -325,6 +326,9 @@ export function Sidebar({
 
         {/* Report History */}
         <HistoryPanel />
+
+        {/* Citation Library (R6): cross-report imported sources. */}
+        <CitationLibrary />
       </div>
     </div>
   );

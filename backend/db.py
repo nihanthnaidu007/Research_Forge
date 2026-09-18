@@ -8,8 +8,10 @@ are synchronous background tasks.
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
+from citation_library import persistent_id_key
 from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -248,3 +250,137 @@ def cleanup_old_sessions(ttl_seconds: int) -> list:
         logger.info(f"Cleaned up expired session: {session_id}")
 
     return deleted
+
+
+# --- Citation library (R6) ---------------------------------------------------------
+
+def setup_library_db() -> None:
+    """
+    Create the citation-library table if it does not exist.
+
+    Cross-report Source records imported from Zotero/RIS/BibTeX bibliographies.
+    Dedupe runs on the W1 persistent-id key (DOI > arXiv ID > S2 ID > URL >
+    title+year); sources without any key are kept but never deduped, because
+    an unidentifiable record cannot be proven identical to another.
+    """
+    with get_pool().connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS citation_library_sources (
+                id                 TEXT        PRIMARY KEY,
+                persistent_id_key  TEXT,
+                payload            JSONB       NOT NULL,
+                integrity_status   TEXT        NOT NULL DEFAULT 'unknown',
+                occurrences        INT         NOT NULL DEFAULT 1,
+                created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_seen          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # Partial unique index: NULL keys never collide.
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS citation_library_key_idx
+                ON citation_library_sources (persistent_id_key)
+                WHERE persistent_id_key IS NOT NULL
+            """
+        )
+    logger.info("Citation library schema verified")
+
+
+def library_import_sources(records: list[dict]) -> dict:
+    """
+    Upsert parsed source records into the library.
+
+    First-seen wins: an incoming record whose persistent-id key already
+    exists bumps the existing row's occurrence count — it never overwrites
+    the original metadata or integrity status (import provenance is kept).
+    Records without a key are always imported. Returns import counts.
+    """
+    imported = 0
+    duplicates = 0
+    with get_pool().connection() as conn:
+        for record in records:
+            key = persistent_id_key(record)
+            if key:
+                existing = conn.execute(
+                    """
+                    UPDATE citation_library_sources
+                    SET occurrences = occurrences + 1, last_seen = NOW()
+                    WHERE persistent_id_key = %s
+                    RETURNING id
+                    """,
+                    (key,),
+                ).fetchone()
+                if existing:
+                    duplicates += 1
+                    continue
+            conn.execute(
+                """
+                INSERT INTO citation_library_sources
+                    (id, persistent_id_key, payload, integrity_status)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    key,
+                    json.dumps(record),
+                    record.get("integrity_status", "unknown"),
+                ),
+            )
+            imported += 1
+    return {"imported": imported, "duplicates": duplicates}
+
+
+def library_list_sources(
+    limit: int = 200, offset: int = 0, query: str = ""
+) -> list[dict]:
+    """
+    Return library sources, most recently seen first.
+
+    Optional query filters by case-insensitive literal substring on title.
+    """
+    conditions = []
+    values: list[object] = []
+
+    if query:
+        escaped = (
+            query.replace("\\", "\\\\")
+            .replace("%", r"\%")
+            .replace("_", r"\_")
+        )
+        conditions.append("payload->>'title' ILIKE %s ESCAPE '\\'")
+        values.append(f"%{escaped}%")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    values.extend([limit, offset])
+
+    with get_pool().connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, persistent_id_key, payload, integrity_status,
+                   occurrences, created_at, last_seen
+            FROM citation_library_sources
+            {where}
+            ORDER BY last_seen DESC
+            LIMIT %s OFFSET %s
+            """,
+            values,
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "persistent_id_key": row[1],
+            **(row[2] if isinstance(row[2], dict) else {}),
+            "integrity_status": row[3],
+            "occurrences": row[4],
+            "created_at": row[5].isoformat()
+            if hasattr(row[5], "isoformat")
+            else str(row[5]),
+            "last_seen": row[6].isoformat()
+            if hasattr(row[6], "isoformat")
+            else str(row[6]),
+        }
+        for row in rows
+    ]

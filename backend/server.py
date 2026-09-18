@@ -68,6 +68,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 # Import graph components
+from citation_library import normalize_imported_record, parse_bibtex, parse_ris
+
 from auth import (
     SESSION_TOKEN_HEADER,
     enforce_session_ownership,
@@ -83,13 +85,23 @@ from chat import (
     run_chat_turn,
 )
 from db import cleanup_old_sessions as db_cleanup_sessions
-from db import create_session, get_session, list_sessions, setup_db, update_session
+from db import (
+    create_session,
+    get_session,
+    library_import_sources,
+    library_list_sources,
+    list_sessions,
+    setup_db,
+    setup_library_db,
+    update_session,
+)
 from eval.langsmith_tracer import (
     get_trace_url,
     is_tracing_enabled,
     setup_tracing,
 )
 from export.bibtex_exporter import build_bibtex_report
+from export.csl_exporter import build_csl_bibliography
 from export.latex_exporter import build_latex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.agents.templates import DEFAULT_TEMPLATE, TEMPLATE_PATTERN
@@ -135,6 +147,7 @@ async def lifespan(app: FastAPI):
     # --- Startup ---
     validate_env_vars()
     await asyncio.to_thread(setup_db)
+    await asyncio.to_thread(setup_library_db)
     await asyncio.to_thread(get_checkpointer)
     setup_tracing()
 
@@ -243,6 +256,14 @@ class SteerRequest(BaseModel):
     # Literal) because unknown commands must answer 400, not 422.
     command: str
     focus: str | None = Field(default=None, max_length=2000)
+
+
+class LibraryImportRequest(BaseModel):
+    # One import payload: Zotero-exported RIS or BibTeX text, capped at
+    # the schema level. Parsing is offline against the supplied content —
+    # the import endpoint never fetches.
+    format: Literal["ris", "bibtex"]
+    content: str = Field(min_length=1, max_length=1_000_000)
 
 
 # ReportSession defines the schema for session metadata.
@@ -1304,6 +1325,50 @@ async def list_history(
     return {"count": len(sessions), "sessions": sessions}
 
 
+@api_router.get("/library/sources", dependencies=[Depends(require_api_key)])
+async def list_library_sources(
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default="", max_length=200),
+):
+    """
+    List the cross-report citation library (R6).
+
+    Imported Source records behind the API key — no session token, because
+    the library deliberately spans reports. Imported sources carry
+    integrity_status "unknown": they were not retrieved by the research
+    pipeline, and the UI renders that degradation honestly instead of
+    promoting them to verified.
+    """
+    sources = await asyncio.to_thread(library_list_sources, limit, offset, q)
+    return {"count": len(sources), "sources": sources}
+
+
+@api_router.post("/library/import", dependencies=[Depends(require_api_key)])
+async def import_library_sources(request: LibraryImportRequest):
+    """
+    Import Zotero/RIS or BibTeX bibliographies into the citation library.
+
+    Records are deduped on the W1 persistent-id key (DOI > arXiv ID >
+    Semantic Scholar ID > URL > title+year). First-seen metadata wins:
+    a re-import only bumps the occurrence count, never overwriting the
+    original record or its integrity status. Parsing is offline against
+    the supplied content — no network fetches.
+    """
+    if request.format == "ris":
+        parsed = parse_ris(request.content)
+    else:
+        parsed = parse_bibtex(request.content)
+    if not parsed:
+        raise HTTPException(
+            status_code=422,
+            detail="No importable records found in the provided content",
+        )
+    records = [normalize_imported_record(record) for record in parsed]
+    counts = await asyncio.to_thread(library_import_sources, records)
+    return {**counts, "parsed": len(records)}
+
+
 @api_router.get(
     "/session/{session_id}/stream",
     dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
@@ -1781,6 +1846,37 @@ async def export_bibtex_endpoint(session_id: str):
     return Response(
         content=bibtex,
         media_type="application/x-bibtex; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post(
+    "/export-csl",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_csl_endpoint(session_id: str, style: str = "apa"):
+    """Export the report's citations as a CSL-styled bibliography download.
+
+    Styles: apa (APA 7), mla (MLA 9), ieee (IEEE). Deterministic in-repo
+    formatting — no citeproc-py or pandoc dependency.
+    """
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        csl = await asyncio.to_thread(build_csl_bibliography, state, style)
+    except ValueError as e:
+        logger.error(f"CSL export validation error for session {session_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, f"{style}.txt"
+    )
+    logger.info(f"CSL ({style}) exported for session {session_id}")
+
+    return Response(
+        content=csl,
+        media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

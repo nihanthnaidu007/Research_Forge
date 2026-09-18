@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, Braces, FileCode, FileDown, FileText, BookMarked } from 'lucide-react';
+import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, Braces, FileCode, FileDown, FileText, BookMarked, Lock, Quote } from 'lucide-react';
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
@@ -10,6 +10,25 @@ import {
   SteerFeedback,
   PausedState,
 } from './SteeringControls';
+
+// Reopened reports (R1) restore without the one-time session token, so
+// token-gated actions stay unavailable. The banner states why instead of
+// letting the user click into a 401.
+function RestoredNotice() {
+  return (
+    <div
+      className="flex items-center gap-2 p-3 rounded-sm bg-zinc-900/40 border border-zinc-800"
+      data-testid="restored-notice"
+    >
+      <Lock className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" strokeWidth={1.5} />
+      <p className="text-xs text-zinc-500">
+        Reopened from history — read-only view. Exports and chat need the
+        original session token and are available only in the report&apos;s
+        own session.
+      </p>
+    </div>
+  );
+}
 
 function WelcomeState() {
   return (
@@ -112,9 +131,12 @@ const EXPORT_FORMATS = [
   { format: 'docx', label: 'DOCX', icon: FileDown, testid: 'download-docx-btn' },
   { format: 'bibtex', label: 'BibTeX', icon: BookMarked, testid: 'download-bibtex-btn' },
   { format: 'latex', label: 'LaTeX', icon: Braces, testid: 'download-latex-btn' },
+  { format: 'csl-apa', label: 'Bibliography (APA)', icon: Quote, testid: 'download-csl-apa-btn' },
+  { format: 'csl-mla', label: 'Bibliography (MLA)', icon: Quote, testid: 'download-csl-mla-btn' },
+  { format: 'csl-ieee', label: 'Bibliography (IEEE)', icon: Quote, testid: 'download-csl-ieee-btn' },
 ];
 
-function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport }) {
+function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport, restored, factCheckResults, coverageGaps }) {
   const [exportLoading, setExportLoading] = useState(null); // format id
   const [exportError, setExportError] = useState(null);
 
@@ -143,48 +165,54 @@ function CompletedState({ sessionId, writtenSections, confidenceScores, sources,
       animate={{ opacity: 1 }}
       className="space-y-6"
     >
-      <div className="flex items-center justify-end gap-3">
-        {exportError && (
-          <span className="text-xs text-rose-400 mr-2">{exportError}</span>
-        )}
-        <Button
-          onClick={onReset}
-          variant="outline"
-          className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
-        >
-          <RotateCcw className="w-4 h-4 mr-2" />
-          New Report
-        </Button>
-        {EXPORT_FORMATS.map(({ format, label, icon: Icon, testid }) => (
+      {restored && <RestoredNotice />}
+      {!restored && (
+        <div className="flex items-center justify-end gap-3">
+          {exportError && (
+            <span className="text-xs text-rose-400 mr-2">{exportError}</span>
+          )}
           <Button
-            key={format}
-            onClick={() => handleExport(format)}
-            disabled={exportLoading !== null}
+            onClick={onReset}
             variant="outline"
             className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
-            data-testid={testid}
           >
-            {exportLoading === format ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Icon className="w-4 h-4 mr-2" />
-            )}
-            {exportLoading === format ? 'Generating...' : `Download ${label}`}
+            <RotateCcw className="w-4 h-4 mr-2" />
+            New Report
           </Button>
-        ))}
-      </div>
-      
-      <ReportOutput 
+          {EXPORT_FORMATS.map(({ format, label, icon: Icon, testid }) => (
+            <Button
+              key={format}
+              onClick={() => handleExport(format)}
+              disabled={exportLoading !== null}
+              variant="outline"
+              className="border-zinc-800 hover:border-cyan-500/50 hover:bg-cyan-500/10"
+              data-testid={testid}
+            >
+              {exportLoading === format ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Icon className="w-4 h-4 mr-2" />
+              )}
+              {exportLoading === format ? 'Generating...' : `Download ${label}`}
+            </Button>
+          ))}
+        </div>
+      )}
+
+      <ReportOutput
         writtenSections={writtenSections}
         confidenceScores={confidenceScores}
         sources={sources}
         overallConfidence={overallConfidence}
         versioningReport={versioningReport}
+        factCheckResults={factCheckResults}
+        coverageGaps={coverageGaps}
       />
 
       {/* Chat lives beside the report — the only state where the report
-          and its sources exist to ground answers on. */}
-      <ChatPanel sources={sources} />
+          and its sources exist to ground answers on. A restored report
+          has no session token, so its transcript renders read-only. */}
+      {!restored && <ChatPanel sources={sources} />}
     </motion.div>
   );
 }
@@ -217,6 +245,12 @@ export function MainPanel({
   steerAck,
   steerError,
   researchRounds,
+  // R1 reopen: restored reports render read-only
+  sessionRestored,
+  // R2 fact-check verdicts
+  factCheckResults,
+  // R3 coverage-gap transparency
+  coverageGaps,
 }) {
   const renderContent = () => {
     // Error state — check first so errors always show
@@ -294,6 +328,9 @@ export function MainPanel({
           onReset={onReset}
           versioningReport={versioningReport}
           onExport={onExport}
+          restored={sessionRestored}
+          factCheckResults={factCheckResults}
+          coverageGaps={coverageGaps}
         />
       );
     }

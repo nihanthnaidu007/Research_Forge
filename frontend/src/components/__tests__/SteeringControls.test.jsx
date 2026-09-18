@@ -198,10 +198,17 @@ describe('paused view', () => {
     );
   });
 
-  it('resumes optimistically and confirms through the store', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse(200, { status: 'accepted' }));
+  it('resumes optimistically and re-subscribes the live stream', async () => {
+    // Endpoint-aware mock. The /stream fetch stays pending (as a healthy
+    // stream connection would), which makes three things deterministic:
+    // the optimistic flip to 'running', the re-subscription itself, and
+    // the absence of any status-poll fallback for it.
+    const fetchMock = vi.fn((url) => {
+      if (String(url).includes('/stream')) {
+        return new Promise(() => {});
+      }
+      return Promise.resolve(jsonResponse(200, { status: 'accepted' }));
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const user = userEvent.setup();
@@ -215,6 +222,14 @@ describe('paused view', () => {
     expect(url).toContain('/api/session/sess-1/steer');
     expect(JSON.parse(init.body)).toEqual({ command: 'resume' });
     expect(init.headers['X-Session-Token']).toBe('tok');
+    // The live transport was re-subscribed after the resume, and the
+    // 'accepted' steer response never leaked into the view.
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u).includes('/stream'))
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.every(([u]) => !String(u).includes('/status'))
+    ).toBe(true);
   });
 
   it('refuses to steer without a session token', async () => {

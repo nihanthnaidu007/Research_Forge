@@ -1,5 +1,5 @@
-"""Auth and happy-path tests for the /export-docx, /export-bibtex, and
-/export-latex endpoints.
+"""Auth and happy-path tests for the /export-docx, /export-bibtex,
+/export-latex, and /export-csl endpoints.
 
 All endpoints reuse the W0-protected export flow: API key plus per-session
 ownership token, the same guard chain as /api/export-md and /api/export-html.
@@ -34,13 +34,13 @@ def _authed(client, path, sid, token="tok"):
 # --- Auth guards (all endpoints) -----------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex", "/api/export-csl"])
 def test_export_requires_api_key(client, fake_db, path):
     response = client.post(path, params={"session_id": "s1"})
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex", "/api/export-csl"])
 def test_export_requires_session_token(client, fake_db, path):
     sid = _seed_complete(fake_db)
     response = client.post(
@@ -49,21 +49,21 @@ def test_export_requires_session_token(client, fake_db, path):
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex", "/api/export-csl"])
 def test_export_rejects_wrong_token(client, fake_db, path):
     sid = _seed_complete(fake_db)
     response = _authed(client, path, sid, token="wrong-token")
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex", "/api/export-csl"])
 def test_export_unknown_session_404(client, fake_db, path):
     seed_session(fake_db, token="tok", status="complete", state=SAMPLE_STATE)
     response = _authed(client, path, "missing-session")
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex", "/api/export-csl"])
 def test_export_rejects_incomplete_report(client, fake_db, path):
     waiting = dict(SAMPLE_STATE, written_sections=[])
     sid = _seed_complete(fake_db, status="waiting_approval", state=waiting)
@@ -115,3 +115,45 @@ def test_docx_export_happy_path(client, fake_db):
     # Body is a real DOCX container (ZIP magic) with content.
     assert response.content[:2] == b"PK"
     assert len(response.content) > 0
+
+
+def test_csl_export_happy_path(client, fake_db):
+    sid = _seed_complete(fake_db)
+
+    response = _authed(client, "/api/export-csl", sid, token="tok")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert "attachment" in response.headers["content-disposition"]
+    assert ".apa.txt" in response.headers["content-disposition"]
+    # Body is the deterministic APA bibliography for the seeded state.
+    assert "Vaswani, A., & Shazeer, N. (2017)." in response.text
+    assert "https://doi.org/10.5555/3295222.3295349" in response.text
+
+
+def test_csl_export_style_parameter_selects_style(client, fake_db):
+    sid = _seed_complete(fake_db)
+
+    from conftest import API_KEY_HEADERS
+
+    ieee = client.post(
+        "/api/export-csl",
+        params={"session_id": sid, "style": "ieee"},
+        headers={**API_KEY_HEADERS, "X-Session-Token": "tok"},
+    )
+    assert ieee.status_code == 200
+    assert ieee.text.startswith("[1] A. Vaswani")
+    assert ".ieee.txt" in ieee.headers["content-disposition"]
+
+
+def test_csl_export_unknown_style_400(client, fake_db):
+    sid = _seed_complete(fake_db)
+
+    response = client.post(
+        "/api/export-csl",
+        params={"session_id": sid, "style": "chicago"},
+        headers={**API_KEY_HEADERS, "X-Session-Token": "tok"},
+    )
+
+    assert response.status_code == 400
+    assert "Unknown CSL style" in response.json()["detail"]

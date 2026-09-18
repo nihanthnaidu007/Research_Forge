@@ -13,6 +13,8 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import VerdictPanel from './VerdictPanel';
+import CoverageGapsPanel from './CoverageGaps';
 
 function getConfidenceLevel(score) {
   if (score >= 0.85) return 'high';
@@ -393,7 +395,9 @@ export function ReportOutput({
   confidenceScores, 
   sources, 
   overallConfidence,
-  versioningReport 
+  versioningReport,
+  factCheckResults,
+  coverageGaps,
 }) {
   if (!writtenSections || writtenSections.length === 0) return null;
   
@@ -421,6 +425,10 @@ export function ReportOutput({
         </div>
       </div>
       
+      {/* Coverage gaps (R3): report-level transparency, persisted with the
+          session and rendered on restored reports too */}
+      <CoverageGapsPanel gaps={coverageGaps} />
+
       {/* Sections */}
       <div className="space-y-6">
         {writtenSections.map((section, index) => (
@@ -436,6 +444,9 @@ export function ReportOutput({
         ))}
       </div>
       
+      {/* Fact-check verdicts (R2): persisted per-claim results */}
+      <VerdictPanel results={factCheckResults} />
+
       {/* Citations */}
       {sources && sources.length > 0 && (
         <motion.div
