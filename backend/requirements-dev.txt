@@ -3,3 +3,5 @@
 pytest>=8.0.0
 ruff>=0.6.0
 mypy>=1.8.0
+# reportlab has no py.typed marker; these stubs back the mypy gate
+types-reportlab>=5.0.0

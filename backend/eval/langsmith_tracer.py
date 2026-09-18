@@ -5,6 +5,7 @@ Provides tracing for all agent nodes and LLM calls in the multi-agent graph.
 
 import logging
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -31,7 +32,7 @@ def get_langsmith_config(
     if not os.getenv("LANGCHAIN_TRACING_V2"):
         return {}
 
-    config = {
+    config: dict[str, Any] = {
         "run_name": run_name,
         "tags": tags or ["research-forge", "multi-agent"],
         "metadata": {

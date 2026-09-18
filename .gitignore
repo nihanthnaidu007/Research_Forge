@@ -53,6 +53,7 @@ htmlcov/
 
 # Build caches
 .cache/
+.mypy_cache/
 *.tsbuildinfo
 
 # Archive files

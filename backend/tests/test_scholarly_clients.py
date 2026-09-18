@@ -116,6 +116,7 @@ def test_s2_optional_free_key_reaches_request_headers(monkeypatch):
 
     results = clients.search_semantic_scholar("query")
 
+    assert getter.last_headers is not None
     assert getter.last_headers["x-api-key"] == "free-tier-key"
     assert len(results) == 1
 
@@ -186,6 +187,7 @@ def test_crossref_polite_pool_params(monkeypatch):
 
     clients.search_crossref("query")
 
+    assert getter.last_params is not None
     assert getter.last_params.get("mailto") == "lab@example.org"
 
 
@@ -196,6 +198,7 @@ def test_crossref_without_contact_email_has_no_mailto(monkeypatch):
 
     clients.search_crossref("query")
 
+    assert getter.last_params is not None
     assert "mailto" not in getter.last_params
 
 

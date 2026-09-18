@@ -194,6 +194,7 @@ def test_chat_completion_with_usage_records_against_active_budget(monkeypatch):
             model="gpt-4o", messages=[{"role": "user", "content": "hi"}]
         )
         assert response.usage.total_tokens == 42
+        assert completions.kwargs is not None
         assert completions.kwargs["model"] == "gpt-4o"
         assert budget.used_tokens == 42
     finally:

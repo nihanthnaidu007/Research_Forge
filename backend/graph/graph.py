@@ -8,10 +8,12 @@ import logging
 import os
 import threading
 from datetime import datetime
+from typing import Any, cast
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
+from psycopg import Connection
 from psycopg_pool import ConnectionPool
 
 from graph.agents.citations import citations_node
@@ -27,7 +29,7 @@ from graph.supervisor import supervisor_node
 logger = logging.getLogger(__name__)
 
 
-def route_from_supervisor(state: dict) -> str:
+def route_from_supervisor(state: ReportState) -> str:
     """Route based on supervisor's decision"""
     return state.get("next_agent", "END")
 
@@ -63,7 +65,7 @@ def fan_out_claims(state: dict):
     ]
 
 
-def factcheck_merge_node(state: dict) -> dict:
+def factcheck_merge_node(state: ReportState) -> ReportState:
     """
     Merge node — collects all parallel fact-check results and updates state.
     Runs after all parallel factcheck_single nodes complete.
@@ -116,16 +118,28 @@ def get_checkpointer() -> PostgresSaver:
     global _checkpointer
     if _checkpointer is None:
         db_url = os.getenv("DATABASE_URL")
-        pool = ConnectionPool(
-            db_url,
-            min_size=2,
-            max_size=10,
-            kwargs={"autocommit": True},
+        if not db_url:
+            raise RuntimeError("DATABASE_URL is required for the Postgres checkpointer")
+        # langgraph's PostgresSaver runs dict cursors internally; its stubs
+        # require a dict-row pool while psycopg_pool defaults to tuple rows.
+        pool = cast(
+            ConnectionPool[Connection[dict[str, Any]]],
+            ConnectionPool(
+                db_url,
+                min_size=2,
+                max_size=10,
+                kwargs={"autocommit": True},
+            ),
         )
         _checkpointer = PostgresSaver(pool)
         _checkpointer.setup()
         logger.info("PostgresSaver checkpointer initialized")
     return _checkpointer
+
+
+def _factcheck_fanout_passthrough(state: ReportState) -> ReportState:
+    """Pass-through node that triggers the Send() fan-out conditional edge."""
+    return state
 
 
 def build_graph():
@@ -146,9 +160,7 @@ def build_graph():
     workflow.add_node("citations", citations_node)
 
     # Parallel factcheck nodes — Send() API pattern
-    workflow.add_node(
-        "factcheck_fanout", lambda state: state
-    )  # Pass-through to trigger fan-out
+    workflow.add_node("factcheck_fanout", _factcheck_fanout_passthrough)
     workflow.add_node("factcheck_single", factcheck_single_node)
     workflow.add_node("factcheck_merge", factcheck_merge_node)
 

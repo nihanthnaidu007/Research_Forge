@@ -8,6 +8,7 @@ old-session state round-trip.
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import server
@@ -355,7 +356,7 @@ def test_grounding_block_omits_empty_blocks():
 
 
 def test_validate_citations_dedupes_and_ignores_non_int_numbers():
-    sources = [
+    sources: list[dict[str, Any]] = [
         {"citation_number": 1},
         {"citation_number": "2"},  # malformed — cannot resolve
     ]

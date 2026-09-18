@@ -11,7 +11,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import (
@@ -168,7 +168,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _rate_limit_handler(request: Request, exc: Exception) -> Response:
+    """Adapter for Starlette's handler signature.
+
+    slowapi's handler is registered for RateLimitExceeded only, so the
+    isinstance narrowing below is the dispatch guarantee; anything else
+    is a bug and re-raises."""
+    if isinstance(exc, RateLimitExceeded):
+        return _rate_limit_exceeded_handler(request, exc)
+    raise exc
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_middleware(RequestIDMiddleware)
 
 # Create router with /api prefix
@@ -279,7 +292,7 @@ async def health_check():
     required environment variables. Used by orchestration to detect
     broken instances.
     """
-    health = {
+    health: dict[str, Any] = {
         "status": "ok",
         "agents": [
             "research",
@@ -1486,7 +1499,7 @@ async def upload_pdf(
     # Strip to the basename only (no directory components), remove null bytes,
     # remove all characters except alphanumeric, dots, hyphens, underscores,
     # and truncate to 100 characters to prevent filesystem issues.
-    original_name = Path(file.filename).name  # basename only, drops any path
+    original_name = Path(file.filename or "").name  # basename only, drops any path
     original_name = original_name.replace("\x00", "")  # strip null bytes
     safe_name = "".join(c for c in original_name if c.isalnum() or c in (".", "-", "_"))
     if not safe_name or safe_name.startswith("."):

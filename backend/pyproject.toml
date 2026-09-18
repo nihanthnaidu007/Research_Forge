@@ -1,0 +1,37 @@
+# mypy configuration — the standing "mypy clean" gate (post-audit remediation G1).
+#
+# Invocation: from backend/ (the Python root: `server`, `graph`, `export`, ... are
+# top-level modules), run:
+#     mypy .
+# CI runs exactly that in .github/workflows/ci.yml (typecheck job).
+#
+# Pragmatic starting gate per the AXIOM program standard: every module is
+# crawled (including tests) with check_untyped_defs on. No module is excluded —
+# the only overrides below silence *untyped third-party imports*, not code.
+
+[tool.mypy]
+python_version = "3.13"
+
+# tests/ has no __init__.py (pytest's rootdir-based collection), so mypy
+# otherwise reaches the same file under two module names ("source file found
+# twice"). Explicit package bases make cwd the single naming root.
+explicit_package_bases = true
+
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# --- Untyped third-party imports (no stubs exist; code is still checked) ---
+
+[[tool.mypy.overrides]]
+# tavily-python ships no py.typed marker or stubs.
+module = "tavily.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pytest's conftest.py is importable only via pytest's own rootdir insertion —
+# plain `from conftest import ...` is unresolvable for any static checker
+# without restructuring tests/ into a package. The fixtures resolve as Any.
+module = "conftest"
+ignore_missing_imports = true

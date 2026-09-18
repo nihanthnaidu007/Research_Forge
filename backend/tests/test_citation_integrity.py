@@ -117,15 +117,21 @@ def fake_s2_lookup(results: dict[str, dict[str, Any] | None]):
     return lookup
 
 
-def fake_crossref(retracted_dois: set[str]):
-    calls = []
+class _RecordingCrossrefLookup:
+    """Callable Crossref fake — returns the retraction verdict and records
+    the DOIs it was asked about."""
 
-    def lookup(doi):
-        calls.append(doi)
-        return doi in retracted_dois
+    def __init__(self, retracted_dois: set[str]):
+        self.retracted_dois = retracted_dois
+        self.calls: list[str] = []
 
-    lookup.calls = calls
-    return lookup
+    def __call__(self, doi: str) -> bool:
+        self.calls.append(doi)
+        return doi in self.retracted_dois
+
+
+def fake_crossref(retracted_dois: set[str]) -> _RecordingCrossrefLookup:
+    return _RecordingCrossrefLookup(retracted_dois)
 
 
 # --- scholarly.clients.get_paper_integrity ------------------------------------

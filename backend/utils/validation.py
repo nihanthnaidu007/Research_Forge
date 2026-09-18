@@ -91,7 +91,7 @@ def validate_url(url: str) -> tuple[bool, str]:
 
     # Check every resolved IP
     for result in results:
-        ip_str = result[4][0]
+        ip_str = str(result[4][0])
         if _is_ip_blocked(ip_str):
             return False, (
                 f"Hostname '{hostname}' resolves to blocked address '{ip_str}' "
