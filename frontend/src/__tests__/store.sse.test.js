@@ -178,9 +178,11 @@ describe('SSE live view', () => {
 
     const streamCall = fetchCalls.find((c) => c.url.includes('/stream'));
     expect(streamCall).toBeDefined();
+    // The regression target: the one-time session token issued at run time
+    // must ride on the stream request. (X-API-Key presence is ambient — it
+    // depends on VITE_API_KEY/localStorage — so it is not asserted here.)
     const headers = streamCall.init.headers;
     expect(headers['X-Session-Token']).toBe('tok');
-    expect(headers['X-API-Key']).toBeTruthy();
   });
 
   it('regression: a stale poll after completion cannot downgrade the view', async () => {

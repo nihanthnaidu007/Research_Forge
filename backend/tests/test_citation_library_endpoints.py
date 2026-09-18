@@ -7,13 +7,16 @@ in-memory store mirroring db.py's first-seen-wins dedupe semantics.
 """
 
 import uuid
+from pathlib import Path
 
 import pytest
 from citation_library import persistent_id_key
 from conftest import API_KEY_HEADERS
 
-RIS_FIXTURE = open("tests/fixtures/citation_library_import.ris").read()
-BIBTEX_FIXTURE = open("tests/fixtures/golden_sample_report.bib").read()
+# Resolve against this file's directory — pytest may run from the repo root.
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+RIS_FIXTURE = (FIXTURES / "citation_library_import.ris").read_text()
+BIBTEX_FIXTURE = (FIXTURES / "golden_sample_report.bib").read_text()
 
 
 @pytest.fixture

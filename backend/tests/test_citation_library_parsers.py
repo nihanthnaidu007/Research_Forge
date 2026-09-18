@@ -6,10 +6,14 @@ live network. The dedupe key is the W1 persistent-id priority chain:
 DOI > arXiv ID > Semantic Scholar ID > URL > title+year.
 """
 
+from pathlib import Path
+
 import citation_library as cl
 
-RIS_FIXTURE = open("tests/fixtures/citation_library_import.ris").read()
-BIBTEX_FIXTURE = open("tests/fixtures/golden_sample_report.bib").read()
+# Resolve against this file's directory — pytest may run from the repo root.
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+RIS_FIXTURE = (FIXTURES / "citation_library_import.ris").read_text()
+BIBTEX_FIXTURE = (FIXTURES / "golden_sample_report.bib").read_text()
 
 
 def test_parse_bibtex_golden_fixture():
