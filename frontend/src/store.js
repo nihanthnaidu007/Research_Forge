@@ -467,12 +467,16 @@ export const useStore = create((set, get) => ({
     }
   },
 
-  fetchHistory: async () => {
+  fetchHistory: async (query = '') => {
+    // Optional topic search (W5): server-side filter over session topics.
     set({ historyLoading: true, historyError: null });
     try {
-      const response = await fetch(apiUrl('/api/history'), {
-        headers: authHeaders(),
-      });
+      const response = await fetch(
+        apiUrl(`/api/history${query ? `?q=${encodeURIComponent(query)}` : ''}`),
+        {
+          headers: authHeaders(),
+        }
+      );
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.detail || `Failed to load history (${response.status})`);

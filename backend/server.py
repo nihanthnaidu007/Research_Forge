@@ -1288,14 +1288,19 @@ async def get_session_endpoint(session_id: str):
 async def list_history(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    q: str = Query(default="", max_length=200),
 ):
     """
     List past report sessions, newest first (history dashboard).
 
+    Optional q filters by case-insensitive substring match on the session
+    topic — topic/title search only; report bodies are never searched or
+    surfaced (the listing's privacy invariant).
+
     Operator-level listing behind the API key. Returns metadata only —
     no report state and no token material.
     """
-    sessions = await asyncio.to_thread(list_sessions, limit, offset)
+    sessions = await asyncio.to_thread(list_sessions, limit, offset, q)
     return {"count": len(sessions), "sessions": sessions}
 
 
