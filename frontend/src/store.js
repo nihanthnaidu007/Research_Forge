@@ -426,6 +426,11 @@ export const useStore = create((set, get) => ({
     const controller = new AbortController();
     _stream.controller = controller;
 
+    // The stream endpoint enforces session ownership (one-time token), so
+    // the subscription must carry the token issued at run time — an
+    // API key alone 401s and silently degrades every live view to polling.
+    const sessionToken = get().sessionToken;
+
     const applyUpdateEvent = (event) => {
       if (get().sessionId !== sessionId) return;
       // Same staleness rule as the poll path: a terminal view never
@@ -473,7 +478,7 @@ export const useStore = create((set, get) => ({
 
     try {
       const response = await fetch(apiUrl(`/api/session/${sessionId}/stream`), {
-        headers: authHeaders(),
+        headers: authHeaders(sessionToken),
         signal: controller.signal,
       });
       if (!response.ok || !response.body) {

@@ -149,6 +149,40 @@ describe('SSE live view', () => {
     // (The next status fetch would 404 "unexpected"; nothing threw.)
   });
 
+  it('regression: the stream request carries the session ownership token', async () => {
+    // The stream endpoint enforces session ownership in addition to the
+    // API key. A token-less stream fetch 401s on every token-protected
+    // session and silently degrades every live view to polling — the bug
+    // surfaced during browser dogfooding, where GET /stream returned 401
+    // while the run still completed through the polling fallback.
+    const fetchCalls = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url, init) => {
+        fetchCalls.push({ url: String(url), init });
+        if (String(url).includes('/stream')) {
+          return Promise.resolve(
+            sseResponse([
+              `data: ${JSON.stringify({ type: 'state', session: COMPLETE_SESSION })}\n\n`,
+            ])
+          );
+        }
+        if (String(url).endsWith(`/api/session/${SESSION_ID}`)) {
+          return Promise.resolve(jsonResponse(200, COMPLETE_SESSION));
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'unexpected' }));
+      })
+    );
+
+    await useStore.getState().subscribeToStream(SESSION_ID);
+
+    const streamCall = fetchCalls.find((c) => c.url.includes('/stream'));
+    expect(streamCall).toBeDefined();
+    const headers = streamCall.init.headers;
+    expect(headers['X-Session-Token']).toBe('tok');
+    expect(headers['X-API-Key']).toBeTruthy();
+  });
+
   it('regression: a stale poll after completion cannot downgrade the view', async () => {
     vi.stubGlobal(
       'fetch',
