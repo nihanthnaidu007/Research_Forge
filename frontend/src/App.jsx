@@ -12,6 +12,7 @@ function App() {
     sessionId,
     topic, setTopic,
     depth, setDepth,
+    reportTemplate, setReportTemplate,
     inputUrls, addUrl, removeUrl,
     uploadedFiles, addFile, removeFile,
     status,
@@ -64,6 +65,8 @@ function App() {
           setTopic={setTopic}
           depth={depth}
           setDepth={setDepth}
+          reportTemplate={reportTemplate}
+          setReportTemplate={setReportTemplate}
           inputUrls={inputUrls}
           addUrl={addUrl}
           removeUrl={removeUrl}

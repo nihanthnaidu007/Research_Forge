@@ -92,6 +92,7 @@ from eval.langsmith_tracer import (
 from export.bibtex_exporter import build_bibtex_report
 from export.latex_exporter import build_latex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
+from graph.agents.templates import DEFAULT_TEMPLATE, TEMPLATE_PATTERN
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
 from graph.supervisor import max_research_rounds
@@ -207,6 +208,10 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 class RunReportRequest(BaseModel):
     topic: str = Field(..., min_length=3, max_length=500)
     depth: str = Field(default="quick", pattern="^(quick|deep)$")
+    # Report template preset (W5): validated at the schema level like depth —
+    # unknown values answer 422. Pattern is built from the template registry
+    # so the two can never drift.
+    template: str = Field(default=DEFAULT_TEMPLATE, pattern=TEMPLATE_PATTERN)
     input_urls: list[str] = Field(default_factory=list)
     uploaded_pdfs: list[str] = Field(default_factory=list)
 
@@ -389,6 +394,7 @@ async def run_report(
         depth=run_request.depth,
         uploaded_pdfs=valid_pdfs,
         input_urls=valid_urls,
+        report_template=run_request.template,
     )
 
     # Global cost ceiling: refuse to queue new graph executions at capacity.

@@ -9,6 +9,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from langsmith import traceable
 
+from graph.agents.templates import DEFAULT_TEMPLATE, build_outline_messages
 from graph.state import ReportState, without_parallel_fact_results
 from utils.clients import chat_completion_with_usage
 from utils.llm_utils import call_with_retry
@@ -57,40 +58,24 @@ def generate_outline(
     fact_check_results: list[dict],
     research_results: list[dict],
     document_summary: str = "",
+    template: str = DEFAULT_TEMPLATE,
 ) -> list[dict]:
     """
     Generate a report outline using LLM based on research findings.
-    depth="quick" → 3 sections, depth="deep" → 6 sections
+    depth="quick" → 3 sections, depth="deep" → 6 sections.
+    The template shapes outline structure only: num_sections stays keyed
+    on depth and synthesis's per-section cap is untouched by design.
     """
     num_sections = 6 if depth == "deep" else 3
 
-    # Build context from research and fact-checks
-    research_context = "\n".join(
-        f"- {r.get('title', 'Unknown')}: {r.get('snippet', '')[:200]}"
-        for r in research_results[:8]
+    messages = build_outline_messages(
+        topic=topic,
+        num_sections=num_sections,
+        template=template,
+        research_results=research_results,
+        fact_check_results=fact_check_results,
+        document_summary=document_summary,
     )
-
-    factcheck_context = "\n".join(
-        f"- [{r.get('verdict', 'UNKNOWN')}] {r.get('claim', '')[:150]}"
-        for r in fact_check_results[:6]
-    )
-
-    doc_context = (
-        f"\nDocument insights: {document_summary[:500]}" if document_summary else ""
-    )
-
-    user_prompt = f"""Topic: {topic}
-
-Number of sections to generate: {num_sections}
-
-Research findings:
-{research_context}
-
-Fact-check results:
-{factcheck_context}
-{doc_context}
-
-Generate a {num_sections}-section report outline that covers this topic comprehensively. Return only JSON array."""
 
     try:
         response = call_with_retry(
@@ -99,10 +84,7 @@ Generate a {num_sections}-section report outline that covers this topic comprehe
                 temperature=0.4,
                 max_completion_tokens=1000,
                 response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": OUTLINE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
             ),
             label="outline generate_outline",
         )
@@ -160,17 +142,26 @@ def outline_node(state: ReportState) -> ReportState:
     timestamp = datetime.now().strftime("%H:%M:%S")
     topic = state.get("topic", "")
     depth = state.get("depth", "quick")
+    # `or` fallback, not .get(k, default): restored pre-W5 checkpoints can
+    # carry the key as None, which .get's default does not replace.
+    template = state.get("report_template") or DEFAULT_TEMPLATE
     fact_check_results = state.get("fact_check_results", [])
     research_results = state.get("research_results", [])
     document_summary = state.get("document_summary", "")
 
+    template_note = f" ({template} template)" if template != DEFAULT_TEMPLATE else ""
     state["stream_updates"].append(
-        f"[{timestamp}] Outline Agent → Generating {depth} report structure..."
+        f"[{timestamp}] Outline Agent → Generating {depth} report structure{template_note}..."
     )
 
     try:
         outline = generate_outline(
-            topic, depth, fact_check_results, research_results, document_summary
+            topic,
+            depth,
+            fact_check_results,
+            research_results,
+            document_summary,
+            template,
         )
 
         # Check if the returned outline looks like the generic fallback.

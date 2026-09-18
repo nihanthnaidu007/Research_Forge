@@ -165,6 +165,12 @@ class ReportState(TypedDict):
     # Synthesis folds it into section prompts; empty when never steered.
     redirect_focus: str
 
+    # Report templates (W5): the named outline-prompt preset selected at
+    # run time. Absent on pre-W5 sessions — readers must .get() with the
+    # "standard" default (or-fallback: restored old checkpoints can carry
+    # the key as None), never index directly.
+    report_template: str
+
     # Orchestration
     current_agent: str  # name of currently running agent
     completed_agents: list[str]  # agents that have finished
@@ -203,6 +209,7 @@ def create_initial_state(
     depth: str = "quick",
     uploaded_pdfs: list[str] | None = None,
     input_urls: list[str] | None = None,
+    report_template: str = "standard",
 ) -> ReportState:
     """Create an initial state for the graph"""
     uploaded_pdfs = uploaded_pdfs or []
@@ -211,6 +218,7 @@ def create_initial_state(
     return {
         "topic": topic,
         "depth": depth,
+        "report_template": report_template,
         "uploaded_pdfs": uploaded_pdfs,
         "input_urls": input_urls,
         "research_results": [],

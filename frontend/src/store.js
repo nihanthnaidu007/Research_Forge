@@ -29,6 +29,9 @@ const initialState = {
   status: 'idle',
   topic: '',
   depth: 'quick',
+  // Report template preset (W5): shapes outline structure only — section
+  // count follows depth and synthesis length stays fixed.
+  reportTemplate: 'standard',
   inputUrls: [],
   uploadedFiles: [],
   currentAgent: '',
@@ -73,6 +76,7 @@ export const useStore = create((set, get) => ({
 
   setTopic: (topic) => set({ topic }),
   setDepth: (depth) => set({ depth }),
+  setReportTemplate: (template) => set({ reportTemplate: template }),
 
   addUrl: (url) => set((state) => ({
     inputUrls: [...state.inputUrls, url]
@@ -99,7 +103,7 @@ export const useStore = create((set, get) => ({
   }),
 
   startReport: async () => {
-    const { topic, depth, inputUrls } = get();
+    const { topic, depth, reportTemplate, inputUrls } = get();
 
     if (!topic || !topic.trim() || topic.trim().length < 3) {
       set({ error: 'Please enter a research topic (minimum 3 characters)' });
@@ -176,6 +180,7 @@ export const useStore = create((set, get) => ({
           body: JSON.stringify({
             topic: topic.trim(),
             depth: depth || 'quick',
+            template: reportTemplate || 'standard',
             input_urls: parsedUrls,
             uploaded_pdfs: uploadedPdfPaths,
           }),
