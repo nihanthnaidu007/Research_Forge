@@ -14,7 +14,7 @@ from scholarly.merge import (
     merge_scholarly_and_web_results,
 )
 
-from graph.state import ReportState
+from graph.state import ReportState, without_parallel_fact_results
 from utils.clients import get_tavily_client
 from utils.url_utils import extract_domain
 
@@ -100,6 +100,23 @@ def perform_tavily_search(
     return []
 
 
+def build_round_queries(topic: str, coverage_gaps: list[str]) -> list[str]:
+    """
+    Round-scoped search queries for a gap-driven re-research round (W4).
+
+    Deterministic: each coverage gap becomes one topic-anchored query, capped
+    at three per round so one bad round cannot fan out unbounded searches.
+    """
+    queries = []
+    for gap in coverage_gaps:
+        cleaned = " ".join(str(gap).split())[:120]
+        if cleaned:
+            queries.append(f"{topic} {cleaned}")
+        if len(queries) == 3:
+            break
+    return queries
+
+
 @traceable(name="research-agent", run_type="chain")
 def research_node(state: ReportState) -> ReportState:
     """
@@ -109,9 +126,24 @@ def research_node(state: ReportState) -> ReportState:
     timestamp = datetime.now().strftime("%H:%M:%S")
     topic = state.get("topic", "")
 
-    state["stream_updates"].append(
-        f"[{timestamp}] Research Agent → Starting web research for: {topic}"
-    )
+    # W4 deep-research loop: a gap-tripped round (research_rounds > 0 with
+    # recorded coverage gaps) searches gap-scoped queries instead of the
+    # standard templates, and APPENDS to research_results so earlier rounds'
+    # sources stay citable.
+    research_round = state.get("research_rounds") or 0
+    coverage_gaps = state.get("coverage_gaps") or []
+    is_re_round = research_round > 0 and bool(coverage_gaps)
+
+    if is_re_round:
+        queries = build_round_queries(topic, coverage_gaps)
+        state["stream_updates"].append(
+            f"[{timestamp}] Research Agent → Re-research round {research_round}: "
+            f"{len(queries)} gap-scoped quer{'y' if len(queries) == 1 else 'ies'}"
+        )
+    else:
+        state["stream_updates"].append(
+            f"[{timestamp}] Research Agent → Starting web research for: {topic}"
+        )
 
     # Debug signal: confirm whether this backend process has a Tavily API key.
     # (We don't print the key value to avoid leaking secrets.)
@@ -171,9 +203,23 @@ def research_node(state: ReportState) -> ReportState:
         # Increment retry counter so supervisor can detect repeated failures
         state["retry_count"] = state.get("retry_count", 0) + 1
 
-        state["research_results"] = all_results
+        if is_re_round:
+            # Re-research rounds APPEND (dedup by URL): sources found in
+            # earlier rounds stay citable, so already-written sections keep
+            # valid citations and only flagged sections get re-synthesized.
+            existing = state.get("research_results", [])
+            existing_urls = {r.get("url") for r in existing}
+            state["research_results"] = existing + [
+                r for r in all_results if r.get("url") not in existing_urls
+            ]
+        else:
+            state["research_results"] = all_results
 
-        if not all_results:
+        if not state.get("research_results"):
+            # Total research emptiness (no sources from any round) is fatal.
+            # An empty RE-round is soft: earlier rounds' sources remain, the
+            # flagged sections re-synthesize from them, and the round cap
+            # bounds any further looping.
             state["error"] = (
                 "Research returned no results after searching Tavily and the "
                 "scholarly APIs (Semantic Scholar, arXiv, Crossref). "
@@ -184,6 +230,11 @@ def research_node(state: ReportState) -> ReportState:
                 f"[{timestamp}] \u2717 Research Agent \u2192 No results found. Check TAVILY_API_KEY and network. "
                 f"Attempt {state['retry_count']} of 3."
             )
+        elif is_re_round:
+            state["stream_updates"].append(
+                f"[{timestamp}] Research Agent → Round {research_round} added "
+                f"{len(all_results)} new source(s); {len(state['research_results'])} total"
+            )
 
         # Update status
         state["completed_agents"].append("research")
@@ -191,11 +242,11 @@ def research_node(state: ReportState) -> ReportState:
         state["stream_updates"].append(final_msg)
         logger.info(final_msg)
 
-        return state
+        return without_parallel_fact_results(state)
 
     except Exception as e:
         error_msg = f"[{timestamp}] Research Agent → Error: {str(e)}"
         state["stream_updates"].append(error_msg)
         state["error"] = str(e)
         logger.error(error_msg)
-        return state
+        return without_parallel_fact_results(state)

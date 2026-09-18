@@ -11,9 +11,18 @@ tokens than RUN_TOKEN_BUDGET allows, record() raises TokenBudgetExceeded so
 the graph execution fails fast with a sanitized client-facing error instead
 of silently burning credits.
 
-The budget applies per graph-execution phase (initial run, post-approval
-resume): each phase enforces the full budget, and the registry entry is
-released when the phase ends.
+Budget semantics are per RUN (W4): the registry entry survives across graph
+execution phases (initial run → waiting_approval → post-approval resume) and
+across deep-research rounds, and is released only when the run truly ends —
+completion or terminal error. The earlier per-phase semantics (full budget
+re-armed each phase) silently multiplied the ceiling once re-research rounds
+existed.
+
+Each gap-driven research round is additionally bounded by its own sub-cap
+(RESEARCH_ROUND_TOKEN_BUDGET) so a single round cannot consume the whole run
+budget. Round budgets live in their own registry: the driver creates a fresh
+one at each round start and releases it when the round ends (citations
+reached) or the run terminates.
 """
 
 import os
@@ -22,6 +31,7 @@ from contextvars import ContextVar, Token
 
 _budgets: dict[str, "RunTokenBudget"] = {}
 _chat_budgets: dict[str, "RunTokenBudget"] = {}
+_round_budgets: dict[str, "RunTokenBudget"] = {}
 _registry_lock = threading.Lock()
 
 # Tracks which session the current call stack serves, so a shared OpenAI
@@ -93,7 +103,8 @@ def ensure_budget(session_id: str) -> RunTokenBudget:
 
 
 def release_budget(session_id: str) -> None:
-    """Drop the session's budget. Called when a graph-execution phase ends."""
+    """Drop the session's budget. Called when the run truly ends: completion
+    or terminal error — never between phases or rounds (per-run semantics)."""
     with _registry_lock:
         _budgets.pop(session_id, None)
 
@@ -101,6 +112,40 @@ def release_budget(session_id: str) -> None:
 def get_budget(session_id: str) -> RunTokenBudget | None:
     with _registry_lock:
         return _budgets.get(session_id)
+
+
+def _round_max_tokens_from_env() -> int | None:
+    return _max_tokens_from_env_var("RESEARCH_ROUND_TOKEN_BUDGET")
+
+
+def ensure_round_budget(session_id: str) -> RunTokenBudget:
+    """
+    Return the session's active research-round budget, creating one from
+    RESEARCH_ROUND_TOKEN_BUDGET if absent.
+
+    The driver calls this at each gap-tripped round start (after releasing
+    the previous round's entry) so every round gets a fresh sub-cap. When
+    the env var is unset the round budget is unlimited — the run budget
+    remains the only ceiling.
+    """
+    with _registry_lock:
+        budget = _round_budgets.get(session_id)
+        if budget is None:
+            budget = RunTokenBudget(_round_max_tokens_from_env())
+            _round_budgets[session_id] = budget
+        return budget
+
+
+def release_round_budget(session_id: str) -> None:
+    """Drop the session's round budget. Called when a round ends (citations
+    reached) or the run terminates; a no-op when no round is active."""
+    with _registry_lock:
+        _round_budgets.pop(session_id, None)
+
+
+def get_round_budget(session_id: str) -> RunTokenBudget | None:
+    with _registry_lock:
+        return _round_budgets.get(session_id)
 
 
 def ensure_chat_budget(session_id: str) -> RunTokenBudget:
@@ -145,14 +190,24 @@ def record_usage_for_current_session(tokens: int) -> None:
     Attribute tokens to the run active in the current context.
 
     No-op when no session context is set or the session has no registered
-    budget; raises TokenBudgetExceeded when the active budget is exceeded.
+    budget; raises TokenBudgetExceeded when the active budget is exceeded —
+    the run budget first, then the active round sub-cap when one is live.
     """
     session_id = _current_session_id.get()
     if session_id is None:
         return
     with _registry_lock:
-        # Graph phases first; chat turns (own registry) second. The two never
-        # overlap for one session — chat is gated to status == complete.
-        budget = _budgets.get(session_id) or _chat_budgets.get(session_id)
+        budget = _budgets.get(session_id)
+        round_budget = _round_budgets.get(session_id)
+        chat_budget = None
+        if budget is None and round_budget is None:
+            # Chat turns are gated to status == complete, when no run or
+            # round budget exists for the session — chat only ever records
+            # then (pre-W4 XOR semantics; CHAT_TOKEN_BUDGET untouched).
+            chat_budget = _chat_budgets.get(session_id)
     if budget is not None:
         budget.record(tokens)
+    if round_budget is not None:
+        round_budget.record(tokens)
+    if chat_budget is not None:
+        chat_budget.record(tokens)

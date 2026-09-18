@@ -153,6 +153,18 @@ class ReportState(TypedDict):
     # index directly (W2 old-checkpoint precedent).
     chat_messages: list[dict]
 
+    # Deep-research loop (W4): rounds of gap-driven re-research after outline
+    # approval. research_rounds counts completed gap trips; coverage_gaps
+    # carries the deterministic gap descriptions that scoped the latest
+    # round's queries. Absent on pre-W4 sessions — readers must .get() with
+    # an honest default (0 / empty), never index directly.
+    research_rounds: int
+    coverage_gaps: list[str]
+
+    # Mid-run steering (W4): merged free-text focus from redirect commands.
+    # Synthesis folds it into section prompts; empty when never steered.
+    redirect_focus: str
+
     # Orchestration
     current_agent: str  # name of currently running agent
     completed_agents: list[str]  # agents that have finished
@@ -168,6 +180,19 @@ class ReportState(TypedDict):
 
     # LangChain messages (required by LangGraph)
     messages: Annotated[list[BaseMessage], add_messages]
+
+
+def without_parallel_fact_results(state: ReportState) -> ReportState:
+    """Node-return view that omits the Send()-accumulator channel.
+
+    parallel_fact_check_results uses operator.add: whatever a node returns is
+    concatenated onto the accumulated channel value. Nodes that return the
+    full state therefore re-add the whole list every superstep — 2^N growth
+    that OOM-killed long runs once the W4 loop pushed superstep counts past
+    ~19 (524,288 elements ≈ 100 MB per persist). Only the factcheck_single
+    Send() burst may emit this key, always as a one-element delta.
+    """
+    return {k: v for k, v in state.items() if k != "parallel_fact_check_results"}
 
 
 def create_initial_state(
@@ -198,6 +223,13 @@ def create_initial_state(
         "original_outline": [],
         "changed_section_ids": [],
         "sections_needing_rewrite": [],
+        # W4 deep-research loop. Initialized here so fresh runs never see
+        # None-valued channels, and read defensively ("or" fallbacks) at every
+        # use site: pre-W4 checkpoints restored through the new schema carry
+        # these keys as None, which state.get(key, default) does NOT replace.
+        "research_rounds": 0,
+        "coverage_gaps": [],
+        "redirect_focus": "",
         "written_sections": [],
         "current_section_index": 0,
         "sources": [],

@@ -93,6 +93,7 @@ from export.bibtex_exporter import build_bibtex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
+from graph.supervisor import max_research_rounds
 from utils import token_budget
 from utils.clients import validate_env_vars
 from utils.validation import validate_url
@@ -218,6 +219,13 @@ class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_CHAT_MESSAGE_CHARS)
 
 
+class SteerRequest(BaseModel):
+    # Mid-run steering (W4). The command is validated manually (not a
+    # Literal) because unknown commands must answer 400, not 422.
+    command: str
+    focus: str | None = Field(default=None, max_length=2000)
+
+
 # ReportSession defines the schema for session metadata.
 # Note: sessions are currently persisted as plain dicts in the database
 # via db.py for flexibility. This model serves as the canonical schema
@@ -228,9 +236,11 @@ class ReportSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     topic: str
     depth: str
-    status: Literal["pending", "running", "waiting_approval", "complete", "error"] = (
-        "pending"
-    )
+    # "paused" (W4) is non-terminal: a steering-paused run holds its place in
+    # the checkpoint and resumes on command; polling continues while paused.
+    status: Literal[
+        "pending", "running", "waiting_approval", "complete", "error", "paused"
+    ] = "pending"
     state: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -448,6 +458,8 @@ async def run_graph_async(session_id: str):
                 f"{int(GRAPH_EXECUTION_TIMEOUT)}s for session {session_id}"
             )
             logger.error(timeout_msg)
+            # Terminal error — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
             if session_id:
                 existing = await asyncio.to_thread(get_session, session_id)
                 if existing:
@@ -496,11 +508,15 @@ async def run_graph_async(session_id: str):
             )
         elif is_complete or next_agent == "END":
             session["status"] = "complete"
+            # True completion — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
             await asyncio.to_thread(update_session, session_id, {"status": "complete"})
             logger.info(f"Session {session_id} completed successfully")
         elif has_error:
             session["status"] = "error"
             session["state"]["error"] = has_error
+            # Terminal error — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
             await asyncio.to_thread(
                 update_session,
                 session_id,
@@ -512,10 +528,14 @@ async def run_graph_async(session_id: str):
             logger.error(f"Session {session_id} error: {has_error}")
         else:
             session["status"] = "complete"
+            # True completion — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
             await asyncio.to_thread(update_session, session_id, {"status": "complete"})
 
     except token_budget.TokenBudgetExceeded:
         logger.error(f"Session {session_id}: per-run token budget exhausted")
+        # Terminal error — per-run budget released (W4 semantics).
+        token_budget.release_budget(session_id)
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = (
@@ -534,11 +554,15 @@ async def run_graph_async(session_id: str):
         # Client-visible state gets a generic message plus a short reference;
         # raw exception text stays in the server log only.
         error_ref = uuid.uuid4().hex[:8]
-        logger.error(f"Graph execution error for session {session_id} [ref {error_ref}]: {e}")
+        logger.error(
+            f"Graph execution error for session {session_id} [ref {error_ref}]: {e}"
+        )
         import traceback
 
         logger.error(traceback.format_exc())
 
+        # Terminal error — per-run budget released (W4 semantics).
+        token_budget.release_budget(session_id)
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = (
@@ -555,7 +579,11 @@ async def run_graph_async(session_id: str):
             )
     finally:
         token_budget.reset_session_context(session_ctx)
-        token_budget.release_budget(session_id)
+        # W4 per-run budget semantics: the budget is NOT released here. It
+        # must survive the waiting_approval pause and any deep-research
+        # rounds so one RUN_TOKEN_BUDGET ceilings the whole run; it is
+        # released only at true completion or terminal error (the branches
+        # above), and for abandoned sessions at TTL cleanup.
         release_run_slot()
 
 
@@ -616,107 +644,17 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
 
         # Step 2: Resume from interrupt by passing None as input
         # interrupt_before=["synthesis"] fires for EVERY synthesis call (one per section).
-        # We loop invoke(None, config) until the graph reaches END or an error occurs.
-        # Each iteration: synthesis writes one section → supervisor routes to next → interrupt fires.
-        # Derive limit from outline length: one iteration per section plus
-        # a fixed buffer for the citations pass and any edge cases.
-        # Minimum of 30 so short outlines still have headroom.
-        approved_outline_len = len(updated_state.get("approved_outline", []))
-        max_iterations = max(30, approved_outline_len * 3)
-        for iteration in range(max_iterations):
-            try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(graph.invoke, None, config),
-                    timeout=GRAPH_RESUME_ITERATION_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                timeout_msg = (
-                    f"Synthesis iteration {iteration + 1} timed out after "
-                    f"{int(GRAPH_RESUME_ITERATION_TIMEOUT)}s for session {session_id}"
-                )
-                logger.error(timeout_msg)
-                existing = await asyncio.to_thread(get_session, session_id)
-                if existing:
-                    existing["state"]["error"] = (
-                        f"Report generation timed out on section "
-                        f"{iteration + 1}. Please try again."
-                    )
-                    await asyncio.to_thread(
-                        update_session,
-                        session_id,
-                        {
-                            "status": "error",
-                            "state": existing["state"],
-                        },
-                    )
-                return
-
-            # Update session state after each section so streaming UI sees progress
-            session["state"] = result
-            await asyncio.to_thread(
-                update_session,
-                session_id,
-                {
-                    "state": result,
-                    "status": session["status"],
-                },
-            )
-
-            is_complete = result.get("is_complete", False)
-            has_error = result.get("error")
-            next_agent = result.get("next_agent", "END")
-
-            logger.info(
-                f"Resume iteration {iteration + 1} for session {session_id}: "
-                f"next_agent={next_agent}, is_complete={is_complete}, "
-                f"sections_written={len(result.get('written_sections', []))}"
-            )
-
-            if is_complete or next_agent == "END":
-                session["status"] = "complete"
-                await asyncio.to_thread(
-                    update_session,
-                    session_id,
-                    {
-                        "status": session["status"],
-                        "state": session["state"],
-                    },
-                )
-                logger.info(f"Session {session_id} completed after outline approval")
-                break
-            elif has_error:
-                session["status"] = "error"
-                await asyncio.to_thread(
-                    update_session,
-                    session_id,
-                    {
-                        "status": session["status"],
-                        "state": session["state"],
-                    },
-                )
-                logger.error(f"Session {session_id} error after resume: {has_error}")
-                break
-            # Otherwise interrupt fired again (next synthesis call) - keep resuming
-        else:
-            # max_iterations reached without completion
-            logger.warning(
-                f"Session {session_id} hit max resume iterations ({max_iterations})"
-            )
-            session["status"] = "error"
-            session["state"]["error"] = (
-                "Graph did not complete within expected iterations"
-            )
-            await asyncio.to_thread(
-                update_session,
-                session_id,
-                {
-                    "status": session["status"],
-                    "state": session["state"],
-                },
-            )
+        # We loop invoke(None, config) until the graph reaches END, an error,
+        # or a steering pause command — see _drive_post_approval_iterations.
+        await _drive_post_approval_iterations(session_id, graph, config, session)
 
     except token_budget.TokenBudgetExceeded:
-        logger.error(f"Session {session_id}: per-run token budget exhausted during resume")
+        logger.error(
+            f"Session {session_id}: per-run token budget exhausted during resume"
+        )
+        # Terminal error — per-run and round budgets released (W4 semantics).
+        token_budget.release_budget(session_id)
+        token_budget.release_round_budget(session_id)
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = (
@@ -735,11 +673,16 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
         # Client-visible state gets a generic message plus a short reference;
         # raw exception text stays in the server log only.
         error_ref = uuid.uuid4().hex[:8]
-        logger.error(f"Graph resume error for session {session_id} [ref {error_ref}]: {e}")
+        logger.error(
+            f"Graph resume error for session {session_id} [ref {error_ref}]: {e}"
+        )
         import traceback
 
         logger.error(traceback.format_exc())
 
+        # Terminal error — per-run and round budgets released (W4 semantics).
+        token_budget.release_budget(session_id)
+        token_budget.release_round_budget(session_id)
         existing = await asyncio.to_thread(get_session, session_id)
         if existing:
             existing["state"]["error"] = (
@@ -756,8 +699,518 @@ async def resume_graph_after_approval(session_id: str, updated_state: dict):
             )
     finally:
         token_budget.reset_session_context(session_ctx)
-        token_budget.release_budget(session_id)
+        # W4 per-run budget semantics: NOT released here. The budget persists
+        # across the waiting_approval pause and deep-research rounds and is
+        # released only at true completion or terminal error (the branches
+        # above), or for abandoned sessions at TTL cleanup.
         release_run_slot()
+
+
+# --- Mid-run steering (W4) -------------------------------------------------
+#
+# pause / resume / redirect for an active post-approval run. Commands ride
+# the session row (inside the state JSONB) so they are visible to polling
+# clients and survive process restarts; the shared driver consumes each
+# command exactly once under the same per-session lock the endpoint writes
+# with. No websockets — the UI observes effects via its status poll.
+
+_steer_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_steer_lock(session_id: str) -> asyncio.Lock:
+    """One lock per session serializing steering writes against
+    per-iteration state persists (chat-lock pattern)."""
+    return _steer_locks.setdefault(session_id, asyncio.Lock())
+
+
+def _apply_redirect_focus(state: dict, focus: str) -> dict:
+    """
+    Merge redirect focus into state and flag targeted sections for rewrite
+    (pure function — returns exactly the checkpoint updates applied).
+
+    A section is targeted when title+description share >= 2 words with the
+    focus (the same overlap rule synthesis uses to match fact-check
+    verdicts). Targeted sections are pruned from written_sections and
+    current_section_index restarts at 0, so the unchanged-section versioning
+    skip reuses every section NOT flagged. With no keyword match but written
+    sections present, the weakest-confidence section is targeted — a
+    redirect must have an observable effect. The returned updates mirror the
+    outline-edit approval shape, so no graph node learns about redirects.
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    merged_focus = f"{state.get('redirect_focus') or ''} {focus}".strip()
+
+    outline = state.get("approved_outline") or state.get("outline", [])
+    written = state.get("written_sections", [])
+    written_ids = {s.get("section_id") for s in written}
+    focus_words = set(focus.lower().split())
+
+    def _matches(section: dict) -> bool:
+        text = f"{section.get('title', '')} {section.get('description', '')}".lower()
+        return len(focus_words & set(text.split())) >= 2
+
+    flagged = [
+        s.get("section_id")
+        for s in outline
+        if _matches(s) and s.get("section_id") in written_ids
+    ]
+
+    if not flagged and written:
+        # Deterministic fallback: nothing matched by keywords — steer the
+        # rewrite at the weakest written section so the redirect always has
+        # an observable effect.
+        scores = state.get("confidence_scores", {})
+        if scores:
+            weakest = min(scores.items(), key=lambda kv: kv[1])[0]
+            if weakest in written_ids:
+                flagged = [weakest]
+
+    if not flagged:
+        # Nothing to rewrite (e.g. redirect landed before any section was
+        # written) — the focus still merges and will ground future synthesis
+        # prompts via redirect_focus.
+        state["redirect_focus"] = merged_focus
+        state["stream_updates"] = state.get("stream_updates", []) + [
+            f'[{timestamp}] ↗️ Redirect focus recorded: "{focus[:80]}"'
+        ]
+        return {
+            "redirect_focus": merged_focus,
+            "stream_updates": state["stream_updates"],
+        }
+
+    state["redirect_focus"] = merged_focus
+    state["changed_section_ids"] = list(
+        dict.fromkeys(state.get("changed_section_ids", []) + flagged)
+    )
+    state["sections_needing_rewrite"] = list(
+        dict.fromkeys(state.get("sections_needing_rewrite", []) + flagged)
+    )
+    state["written_sections"] = [
+        s for s in written if s.get("section_id") not in set(flagged)
+    ]
+    state["current_section_index"] = 0
+    state["stream_updates"] = state.get("stream_updates", []) + [
+        f"[{timestamp}] ↗️ Redirect applied — re-writing {', '.join(flagged)} "
+        f'with focus: "{focus[:80]}"'
+    ]
+    return {
+        "redirect_focus": state["redirect_focus"],
+        "changed_section_ids": state["changed_section_ids"],
+        "sections_needing_rewrite": state["sections_needing_rewrite"],
+        "written_sections": state["written_sections"],
+        "current_section_index": state["current_section_index"],
+        "stream_updates": state["stream_updates"],
+    }
+
+
+async def _persist_iteration_state(session_id: str, result: dict) -> dict:
+    """
+    Persist one post-approval iteration's result under the steer lock.
+
+    Session state is one JSONB blob updated by read-modify-write, so a
+    steering command that arrives while the graph runs would be clobbered by
+    this persist — preserve it for the next pre-invoke consumption (R3).
+    """
+    async with _get_steer_lock(session_id):
+        fresh = await asyncio.to_thread(get_session, session_id)
+        pending = ((fresh or {}).get("state") or {}).get("pending_command")
+        state_to_store = dict(result)
+        if pending is not None:
+            state_to_store["pending_command"] = pending
+        await asyncio.to_thread(update_session, session_id, {"state": state_to_store})
+    return state_to_store
+
+
+async def _consume_pending_command(session_id: str, graph, config: dict) -> dict | None:
+    """
+    Read-and-clear the pending steering command exactly once, under the
+    per-session steer lock.
+
+    A redirect additionally merges its focus updates into the LangGraph
+    checkpoint: the driver resumes from the checkpoint (invoke(None)), not
+    from the session row, so the prune/flag changes must land in both.
+    """
+    async with _get_steer_lock(session_id):
+        fresh = await asyncio.to_thread(get_session, session_id)
+        state = (fresh or {}).get("state") or {}
+        payload = state.get("pending_command")
+        if not payload:
+            return None
+        state["pending_command"] = None
+        redirect_updates: dict | None = None
+        focus = str(payload.get("focus") or "").strip()
+        if payload.get("command") == "redirect" and focus:
+            redirect_updates = _apply_redirect_focus(state, focus)
+            state.update(redirect_updates)
+        await asyncio.to_thread(update_session, session_id, {"state": state})
+    if redirect_updates:
+        await asyncio.to_thread(graph.update_state, config, redirect_updates)
+    return payload
+
+
+async def _drive_post_approval_iterations(
+    session_id: str, graph, config: dict, session: dict
+) -> None:
+    """
+    Shared post-approval driver loop (W4): iterate invoke(None) until the
+    graph completes, errors, or a steering pause command lands.
+
+    Before every invoke, a pending steering command is consumed (exactly
+    once): pause stops the loop and parks the session in the non-terminal
+    "paused" status; redirect merges focus into the checkpoint. After every
+    invoke the result is persisted under the same lock, preserving any
+    command that arrived mid-iteration. The caller holds the run slot and
+    releases it in its own finally.
+
+    Per-run budget semantics (W4): released ONLY at terminal exits —
+    completion, error, or iteration-cap exhaustion. A pause exits without
+    releasing: the run continues later on the same budget.
+    """
+    state = session.get("state", {})
+    approved_outline_len = len(state.get("approved_outline", []))
+    max_rounds = max_research_rounds()
+    # Base headroom: one iteration per section plus buffer (pre-W4 rule);
+    # each research round can add a research pass plus up to a full rewrite
+    # walk, so the cap scales with the round limit.
+    max_iterations = max(30, approved_outline_len * 3) + max_rounds * (
+        approved_outline_len + 2
+    )
+    last_seen_rounds = int(state.get("research_rounds", 0) or 0)
+
+    for iteration in range(max_iterations):
+        command = await _consume_pending_command(session_id, graph, config)
+        if command and command.get("command") == "pause":
+            session["status"] = "paused"
+            # State (incl. the cleared pending_command) is already persisted
+            # by the consumer; only the status flip remains.
+            await asyncio.to_thread(update_session, session_id, {"status": "paused"})
+            logger.info(f"Session {session_id} paused by steering command")
+            return
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(graph.invoke, None, config),
+                timeout=GRAPH_RESUME_ITERATION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            timeout_msg = (
+                f"Synthesis iteration {iteration + 1} timed out after "
+                f"{int(GRAPH_RESUME_ITERATION_TIMEOUT)}s for session {session_id}"
+            )
+            logger.error(timeout_msg)
+            # Terminal error — per-run and round budgets released.
+            token_budget.release_budget(session_id)
+            token_budget.release_round_budget(session_id)
+            existing = await asyncio.to_thread(get_session, session_id)
+            if existing:
+                existing["state"]["error"] = (
+                    f"Report generation timed out on section "
+                    f"{iteration + 1}. Please try again."
+                )
+                await asyncio.to_thread(
+                    update_session,
+                    session_id,
+                    {
+                        "status": "error",
+                        "state": existing["state"],
+                    },
+                )
+            return
+
+        # Update session state after each section so streaming UI sees progress
+        session["state"] = await _persist_iteration_state(session_id, result)
+        await asyncio.to_thread(
+            update_session, session_id, {"status": session["status"]}
+        )
+
+        # Round bookkeeping: a fresh per-round sub-cap for every gap-tripped
+        # round (RESEARCH_ROUND_TOKEN_BUDGET; unset = unlimited).
+        rounds = int(result.get("research_rounds", 0) or 0)
+        if rounds > last_seen_rounds:
+            token_budget.release_round_budget(session_id)
+            token_budget.ensure_round_budget(session_id)
+            last_seen_rounds = rounds
+        next_agent = result.get("next_agent", "END")
+        if next_agent in ("citations", "END") or result.get("is_complete"):
+            # The round ended — drop the sub-cap so an idle round budget
+            # cannot leak into a later round.
+            token_budget.release_round_budget(session_id)
+
+        is_complete = result.get("is_complete", False)
+        has_error = result.get("error")
+
+        logger.info(
+            f"Post-approval iteration {iteration + 1} for session {session_id}: "
+            f"next_agent={next_agent}, is_complete={is_complete}, "
+            f"sections_written={len(result.get('written_sections', []))}, "
+            f"research_rounds={rounds}"
+        )
+
+        if is_complete or next_agent == "END":
+            session["status"] = "complete"
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": session["status"],
+                    "state": session["state"],
+                },
+            )
+            # True completion — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
+            token_budget.release_round_budget(session_id)
+            logger.info(f"Session {session_id} completed after outline approval")
+            return
+        elif has_error:
+            session["status"] = "error"
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": session["status"],
+                    "state": session["state"],
+                },
+            )
+            # Terminal error — per-run budget released (W4 semantics).
+            token_budget.release_budget(session_id)
+            token_budget.release_round_budget(session_id)
+            logger.error(f"Session {session_id} error after resume: {has_error}")
+            return
+        # Otherwise interrupt fired again (next synthesis call) - keep resuming
+
+    # max_iterations reached without completion
+    logger.warning(
+        f"Session {session_id} hit max post-approval iterations ({max_iterations})"
+    )
+    session["status"] = "error"
+    session["state"]["error"] = "Graph did not complete within expected iterations"
+    await asyncio.to_thread(
+        update_session,
+        session_id,
+        {
+            "status": session["status"],
+            "state": session["state"],
+        },
+    )
+    # Terminal error — per-run budget released (W4 semantics).
+    token_budget.release_budget(session_id)
+    token_budget.release_round_budget(session_id)
+
+
+async def resume_after_pause(session_id: str):
+    """
+    Continue a steering-paused run from its checkpoint (W4).
+
+    Same shape as resume_graph_after_approval minus the approval merge: the
+    checkpoint already holds the interrupted state, so there is nothing to
+    update — just re-enter the shared driver loop. The steer endpoint has
+    already reacquired the run slot; this driver releases it.
+    """
+    session = await asyncio.to_thread(get_session, session_id)
+    if not session:
+        return
+    token_budget.ensure_budget(session_id)
+    session_ctx = token_budget.set_session_context(session_id)
+    try:
+        graph = get_graph()
+        config = {
+            "configurable": {"thread_id": session_id},
+            "run_name": session.get("run_name", f"research-report-{session_id[:8]}"),
+            "tags": ["research-forge", "steering-resume"],
+            "metadata": {
+                "session_id": session_id,
+                "topic": (session.get("state") or {}).get("topic", ""),
+                "phase": "steering-resume",
+                "project": "Multi-Agent-Research",
+            },
+        }
+        await _drive_post_approval_iterations(session_id, graph, config, session)
+    except token_budget.TokenBudgetExceeded:
+        logger.error(
+            f"Session {session_id}: per-run token budget exhausted during resume"
+        )
+        # Terminal error — per-run and round budgets released (W4 semantics).
+        token_budget.release_budget(session_id)
+        token_budget.release_round_budget(session_id)
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = (
+                "Report generation stopped: the token budget for this run "
+                "was exhausted. Start a new run or raise RUN_TOKEN_BUDGET."
+            )
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
+    except Exception as e:
+        # Client-visible state gets a generic message plus a short reference;
+        # raw exception text stays in the server log only.
+        error_ref = uuid.uuid4().hex[:8]
+        logger.error(
+            f"Graph resume error for session {session_id} [ref {error_ref}]: {e}"
+        )
+        import traceback
+
+        logger.error(traceback.format_exc())
+
+        # Terminal error — per-run and round budgets released (W4 semantics).
+        token_budget.release_budget(session_id)
+        token_budget.release_round_budget(session_id)
+        existing = await asyncio.to_thread(get_session, session_id)
+        if existing:
+            existing["state"]["error"] = (
+                "Report generation failed due to an internal error. "
+                f"Reference: {error_ref}. Please retry."
+            )
+            await asyncio.to_thread(
+                update_session,
+                session_id,
+                {
+                    "status": "error",
+                    "state": existing["state"],
+                },
+            )
+    finally:
+        token_budget.reset_session_context(session_ctx)
+        release_run_slot()
+
+
+STEER_RATE_LIMIT = "30/minute"
+
+
+async def _write_pending_command(session_id: str, command: dict) -> None:
+    """
+    Write the pending steering command under the per-session steer lock (the
+    chat-lock pattern): the driver reads-and-clears the same field, so the
+    write must never interleave with a per-iteration state persist (R3).
+
+    One pending slot, last writer wins — pause/redirect are momentary
+    intents, and a queued command replaced by a newer one is documented
+    semantics the UI surfaces via polling.
+    """
+    async with _get_steer_lock(session_id):
+        fresh = await asyncio.to_thread(get_session, session_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="Session not found")
+        state = fresh.get("state", {})
+        state["pending_command"] = command
+        await asyncio.to_thread(update_session, session_id, {"state": state})
+
+
+@api_router.post(
+    "/session/{session_id}/steer",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+@limiter.limit(STEER_RATE_LIMIT)
+async def steer_session(
+    request: Request,
+    session_id: str,
+    steer_request: SteerRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Mid-run steering (W4): pause, resume, or redirect an active run.
+
+    pause/redirect write a pending command onto the session row; the shared
+    driver consumes it before its next invoke(None) iteration. resume only
+    applies to a paused session: it reacquires a run slot (429 + Retry-When
+    saturated) and restarts the driver loop from the checkpoint. Effects
+    surface via status polling (2-5s cadence) — no websockets.
+    """
+    command = (steer_request.command or "").strip().lower()
+    if command not in ("pause", "resume", "redirect"):
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown steering command. Use pause, resume, or redirect.",
+        )
+
+    session = await asyncio.to_thread(get_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    status = session.get("status")
+    state = session.get("state", {})
+
+    if command == "pause":
+        if status != "running":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only a running report can be paused. Current status: {status}",
+            )
+        if not state.get("outline_approved"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Steering is available once section writing is underway "
+                    "(after outline approval)."
+                ),
+            )
+        await _write_pending_command(session_id, {"command": "pause"})
+        return {
+            "status": "accepted",
+            "command": "pause",
+            "message": (
+                "Pause requested — it takes effect before the next section "
+                "iteration (a few seconds, visible via status polling)."
+            ),
+        }
+
+    if command == "redirect":
+        if status not in ("running", "paused"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Only an active or paused report can be redirected. "
+                    f"Current status: {status}"
+                ),
+            )
+        if not state.get("outline_approved"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Steering is available once section writing is underway "
+                    "(after outline approval)."
+                ),
+            )
+        focus = (steer_request.focus or "").strip()
+        if not focus:
+            raise HTTPException(
+                status_code=400,
+                detail="Redirect requires non-empty focus text describing what to emphasize.",
+            )
+        await _write_pending_command(
+            session_id, {"command": "redirect", "focus": focus}
+        )
+        return {
+            "status": "accepted",
+            "command": "redirect",
+            "message": (
+                "Redirect queued — focus applies before the next section "
+                "iteration (a few seconds, visible via status polling)."
+            ),
+        }
+
+    # command == "resume"
+    if status != "paused":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only a paused report can be resumed. Current status: {status}",
+        )
+    await acquire_run_slot()
+    try:
+        await asyncio.to_thread(update_session, session_id, {"status": "running"})
+        background_tasks.add_task(resume_after_pause, session_id)
+    except Exception:
+        release_run_slot()
+        raise
+    return {
+        "status": "accepted",
+        "command": "resume",
+        "message": "Resume requested — the run continues from its checkpoint.",
+    }
 
 
 @api_router.get("/session/{session_id}/status", dependencies=[Depends(require_api_key)])
@@ -780,6 +1233,8 @@ async def get_session_status(session_id: str):
         "total_sections": len(state.get("approved_outline", [])),
         "sources_found": len(state.get("research_results", [])),
         "claims_checked": len(state.get("fact_check_results", [])),
+        "research_rounds": int(state.get("research_rounds", 0) or 0),
+        "coverage_gaps": state.get("coverage_gaps", []),
         "error": state.get("error"),
         "is_complete": state.get("is_complete", False),
         "has_outline": len(state.get("outline", [])) > 0,
@@ -860,7 +1315,15 @@ async def stream_session(session_id: str):
                         yield f"data: {data}\n\n"
                     last_update_count = len(updates)
 
-                if session.get("status") in ["waiting_approval", "complete", "error"]:
+                # "paused" (W4 steering) also ends the stream: it is
+                # non-terminal, but nothing streams while paused — the UI
+                # falls back to polling and re-subscribes on resume.
+                if session.get("status") in [
+                    "waiting_approval",
+                    "paused",
+                    "complete",
+                    "error",
+                ]:
                     data = json.dumps({"type": "state", "session": session})
                     yield f"data: {data}\n\n"
                     break
@@ -1129,7 +1592,9 @@ async def export_pdf_endpoint(session_id: str):
         pdf_dir.mkdir(exist_ok=True)
 
         # Safe filename from topic
-        filename = _export_attachment_filename(state.get("topic", "report"), session_id, "pdf")
+        filename = _export_attachment_filename(
+            state.get("topic", "report"), session_id, "pdf"
+        )
         output_path = str(pdf_dir / filename)
 
         # Generate PDF in thread to avoid blocking event loop
@@ -1176,7 +1641,9 @@ async def export_markdown_endpoint(session_id: str):
             status_code=400, detail="Markdown export failed — invalid report state"
         ) from e
 
-    filename = _export_attachment_filename(state.get("topic", "report"), session_id, "md")
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, "md"
+    )
     logger.info(f"Markdown exported for session {session_id}")
 
     return Response(
@@ -1198,9 +1665,7 @@ async def export_html_endpoint(session_id: str):
     try:
         html = await asyncio.to_thread(build_html_report, state)
     except ValueError as e:
-        logger.error(
-            f"HTML export validation error for session {session_id}: {str(e)}"
-        )
+        logger.error(f"HTML export validation error for session {session_id}: {str(e)}")
         raise HTTPException(
             status_code=400, detail="HTML export failed — invalid report state"
         ) from e
@@ -1234,7 +1699,9 @@ async def export_docx_endpoint(session_id: str):
         docx_dir.mkdir(exist_ok=True)
 
         # Safe filename from topic
-        filename = _export_attachment_filename(state.get("topic", "report"), session_id, "docx")
+        filename = _export_attachment_filename(
+            state.get("topic", "report"), session_id, "docx"
+        )
         output_path = str(docx_dir / filename)
 
         # Generate DOCX in thread to avoid blocking event loop
@@ -1559,6 +2026,13 @@ def _cleanup_sessions_and_files() -> None:
         # Delete generated report PDF if it exists
         session_id = session_info["id"]
         _chat_locks.pop(session_id, None)
+        _steer_locks.pop(session_id, None)
+        # Abandoned sessions never reached a terminal status in-process —
+        # release every budget so registries cannot leak (W4 per-run
+        # semantics: TTL cleanup is the sanctioned non-terminal release).
+        token_budget.release_budget(session_id)
+        token_budget.release_round_budget(session_id)
+        token_budget.release_chat_budget(session_id)
         pdf_dir = Path("/tmp/researchforge_pdfs")
         for pdf_file in pdf_dir.glob(f"researchforge-*-{session_id[:8]}.pdf"):
             try:

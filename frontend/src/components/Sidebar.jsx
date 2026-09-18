@@ -38,7 +38,8 @@ export function Sidebar({
   completedAgents,
   agentStats,
   overallConfidence,
-  hasDocuments
+  hasDocuments,
+  paused = false
 }) {
   const [urlInput, setUrlInput] = useState('');
   
@@ -248,6 +249,7 @@ export function Sidebar({
               currentAgent={currentAgent}
               completedAgents={completedAgents}
               hasDocuments={hasDocuments}
+              paused={paused}
             />
           </motion.div>
         )}
