@@ -29,6 +29,7 @@ function App() {
     sources,
     overallConfidence,
     factCheckResults,
+    coverageGaps,
     agentStats,
     error,
     traceUrl,
@@ -111,6 +112,7 @@ function App() {
           sources={sources}
           overallConfidence={overallConfidence}
           factCheckResults={factCheckResults}
+          coverageGaps={coverageGaps}
           error={error}
           onReset={resetReport}
           versioningReport={versioning_report}
