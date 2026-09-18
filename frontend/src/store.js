@@ -74,6 +74,10 @@ const initialState = {
   history: [],
   historyLoading: false,
   historyError: null,
+  librarySources: [],
+  libraryLoading: false,
+  libraryImporting: false,
+  libraryError: null,
   // Chat-with-report transcript (W3). Lives in the store, not component
   // state, so the transcript survives re-renders and resets with the session.
   chatMessages: [],
@@ -662,6 +666,54 @@ export const useStore = create((set, get) => ({
     } catch (err) {
       console.error('History load error:', err);
       set({ historyError: err.message, historyLoading: false });
+    }
+  },
+
+  // Citation library (R6): cross-report Source records imported from
+  // Zotero/RIS/BibTeX bibliographies. API-key scope only — library calls
+  // carry no session token, by design: the library deliberately spans
+  // reports. Imported sources render integrity_status 'unknown'; the
+  // library displays integrity, it never fabricates it.
+  loadLibrary: async () => {
+    set({ libraryLoading: true, libraryError: null });
+    try {
+      const response = await fetch(apiUrl('/api/library/sources'), {
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(
+          errData.detail || `Failed to load library (${response.status})`
+        );
+      }
+      const data = await response.json();
+      set({ librarySources: data.sources || [], libraryLoading: false });
+    } catch (err) {
+      console.error('Library load error:', err);
+      set({ libraryError: err.message, libraryLoading: false });
+    }
+  },
+
+  importCitations: async (format, content) => {
+    set({ libraryImporting: true, libraryError: null });
+    try {
+      const response = await fetch(apiUrl('/api/library/import'), {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format, content }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || `Import failed (${response.status})`);
+      }
+      // Refresh so imported and deduped rows show immediately.
+      await get().loadLibrary();
+      set({ libraryImporting: false });
+      return data; // { imported, duplicates, parsed }
+    } catch (err) {
+      console.error('Citation import error:', err);
+      set({ libraryError: err.message, libraryImporting: false });
+      return null;
     }
   },
 
