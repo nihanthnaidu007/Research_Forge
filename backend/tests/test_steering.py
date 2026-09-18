@@ -233,6 +233,7 @@ def test_redirect_consumed_exactly_once(client, fake_db):
     graph = FakeGraph(scripted_results=[_complete_result()])
 
     payload = asyncio.run(server._consume_pending_command(sid, graph, _mk_config(sid)))
+    assert payload is not None
     assert payload["command"] == "redirect"
     # Second consume: nothing left.
     again = asyncio.run(server._consume_pending_command(sid, graph, _mk_config(sid)))
@@ -310,6 +311,7 @@ def test_pending_command_survives_iteration_persist(client, fake_db):
 
     # Consumption clears it; a later persist must not resurrect it.
     consumed = asyncio.run(server._consume_pending_command(sid, graph, _mk_config(sid)))
+    assert consumed is not None
     assert consumed["command"] == "pause"
     asyncio.run(
         server._persist_iteration_state(
@@ -350,6 +352,7 @@ def test_steer_endpoint_rate_limited(client, fake_db):
             last_response = client.post(
                 f"/api/session/{sid}/steer", json={"command": "pause"}, headers=OWN
             )
+        assert last_response is not None
         assert last_response.status_code == 429
     finally:
         server.limiter.enabled = False

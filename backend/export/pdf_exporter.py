@@ -13,6 +13,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
+    Flowable,
     HRFlowable,
     PageBreak,
     Paragraph,
@@ -255,8 +256,8 @@ def build_cover_page(
     sections_count: int,
     claims_count: int,
     styles,
-) -> list:
-    story = []
+) -> list[Flowable]:
+    story: list[Flowable] = []
 
     # Top accent bar
     accent_bar = Table([[""]], colWidths=[6.5 * inch], rowHeights=[6])
@@ -362,8 +363,8 @@ def build_cover_page(
 # ─── Table of Contents ─────────────────────────────────────────────────────────
 
 
-def build_toc(sections: list[dict], styles) -> list:
-    story = []
+def build_toc(sections: list[dict], styles) -> list[Flowable]:
+    story: list[Flowable] = []
     story.append(Paragraph("TABLE OF CONTENTS", styles["SectionLabel"]))
     story.append(Spacer(1, 0.2 * inch))
     story.append(
@@ -409,8 +410,8 @@ def build_section(
     total_sections: int,
     confidence_score: float,
     styles,
-) -> list:
-    story = []
+) -> list[Flowable]:
+    story: list[Flowable] = []
 
     title = section.get("title", f"Section {section_num}")
     content = section.get("content", "")
@@ -501,8 +502,8 @@ def build_section(
 # ─── Citations Page ─────────────────────────────────────────────────────────────
 
 
-def build_citations_page(sources: list[dict], styles) -> list:
-    story = []
+def build_citations_page(sources: list[dict], styles) -> list[Flowable]:
+    story: list[Flowable] = []
     story.append(PageBreak())
     story.append(Paragraph("REFERENCES", styles["SectionLabel"]))
     story.append(Spacer(1, 0.15 * inch))
@@ -610,7 +611,7 @@ def export_report_to_pdf(state: dict, output_path: str) -> str:
         creator="ResearchForge - LangGraph Multi-Agent System",
     )
 
-    story = []
+    story: list[Flowable] = []
 
     # Cover page
     story.extend(

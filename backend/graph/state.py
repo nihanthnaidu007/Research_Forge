@@ -4,7 +4,7 @@ Single source of truth for the entire multi-agent graph.
 """
 
 import operator
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, cast
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -192,7 +192,10 @@ def without_parallel_fact_results(state: ReportState) -> ReportState:
     ~19 (524,288 elements ≈ 100 MB per persist). Only the factcheck_single
     Send() burst may emit this key, always as a one-element delta.
     """
-    return {k: v for k, v in state.items() if k != "parallel_fact_check_results"}
+    return cast(
+        ReportState,
+        {k: v for k, v in state.items() if k != "parallel_fact_check_results"},
+    )
 
 
 def create_initial_state(

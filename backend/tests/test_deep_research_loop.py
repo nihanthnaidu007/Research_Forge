@@ -7,6 +7,7 @@ anywhere in this file (FakeGraph + fake_db from conftest).
 """
 
 import asyncio
+from typing import cast
 
 import pytest
 import server
@@ -14,11 +15,11 @@ from conftest import API_KEY_HEADERS, FakeGraph, seed_session
 
 from graph import supervisor
 from graph.agents import synthesis
-from graph.state import create_initial_state
+from graph.state import ReportState, create_initial_state
 from utils import token_budget
 
 
-def _full_state(**overrides):
+def _full_state(**overrides) -> ReportState:
     """A fully written, post-approval state with weak coverage."""
     state = {
         "topic": "Quantum computing",
@@ -83,7 +84,9 @@ def _full_state(**overrides):
         "is_complete": False,
     }
     state.update(overrides)
-    return state
+    # Partial fixture state — legal at runtime because every ReportState
+    # reader .get()s absent keys (the old-checkpoint convention).
+    return cast(ReportState, state)
 
 
 # --- Gap-trip thresholds (deterministic, no LLM) ---
@@ -231,14 +234,18 @@ def supervisor_build_queries(gaps):
 def test_old_checkpoint_state_works_end_to_end():
     """A state persisted before W4 (no research_rounds/coverage_gaps/
     redirect_focus keys) must load and route without KeyError."""
-    state = _full_state()
+    # Plain dict on purpose: deleting keys violates the ReportState contract,
+    # so this fixture cannot be typed as one (same as the None-channel test).
+    state = dict(_full_state())
     for key in ("research_rounds", "coverage_gaps", "redirect_focus"):
         state.pop(key, None)
 
-    tripped, gaps, affected = supervisor.evaluate_coverage_gaps(state)
+    tripped, gaps, affected = supervisor.evaluate_coverage_gaps(
+        cast(ReportState, state)
+    )
     assert tripped  # defaults: rounds 0 < cap
     if affected:
-        supervisor.apply_research_round(state, gaps, affected)
+        supervisor.apply_research_round(cast(ReportState, state), gaps, affected)
         assert state["research_rounds"] == 1
 
 
@@ -247,14 +254,18 @@ def test_old_checkpoint_with_none_channel_values_routes_safely():
     as explicit None values — state.get(key, default) does NOT replace those.
     A live dogfood run caught exactly this, so every W4 reader must treat
     None like 'absent'."""
-    state = _full_state()
+    # Plain dict on purpose: this fixture deliberately violates the ReportState
+    # value contract (None channel values), so it cannot be typed as one.
+    state = dict(_full_state())
     state["research_rounds"] = None
     state["coverage_gaps"] = None
     state["redirect_focus"] = None
 
-    tripped, gaps, affected = supervisor.evaluate_coverage_gaps(state)
+    tripped, gaps, affected = supervisor.evaluate_coverage_gaps(
+        cast(ReportState, state)
+    )
     assert tripped
-    supervisor.apply_research_round(state, gaps, affected)
+    supervisor.apply_research_round(cast(ReportState, state), gaps, affected)
     assert state["research_rounds"] == 1
     assert isinstance(state["coverage_gaps"], list) and state["coverage_gaps"]
 

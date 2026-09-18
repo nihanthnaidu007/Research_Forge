@@ -56,7 +56,7 @@ def call_with_retry(
     """
     import openai
 
-    last_exception = None
+    last_exception: openai.APIError | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -98,4 +98,5 @@ def call_with_retry(
                 raise
 
     # Should not reach here — raise the last exception as a safety net
+    assert last_exception is not None
     raise last_exception

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
-from graph.state import without_parallel_fact_results
+from graph.state import ReportState, without_parallel_fact_results
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ class SupervisorDecision(BaseModel):
     reasoning: str = Field(description="Brief explanation for routing decision")
 
 
-def evaluate_coverage_gaps(state: dict) -> tuple[bool, list[str], list[str]]:
+def evaluate_coverage_gaps(state: ReportState) -> tuple[bool, list[str], list[str]]:
     """
     Deterministic gap signal for the deep-research loop (W4).
 
@@ -188,7 +188,7 @@ def evaluate_coverage_gaps(state: dict) -> tuple[bool, list[str], list[str]]:
     return tripped, gaps, affected
 
 
-def apply_research_round(state: dict, gaps: list[str], affected: list[str]) -> None:
+def apply_research_round(state: ReportState, gaps: list[str], affected: list[str]) -> None:
     """
     Mutate state for one gap-driven re-research round (W4).
 
@@ -236,7 +236,7 @@ def apply_research_round(state: dict, gaps: list[str], affected: list[str]) -> N
     )
 
 
-def get_supervisor_decision(state: dict) -> SupervisorDecision:
+def get_supervisor_decision(state: ReportState) -> SupervisorDecision:
     """
     Determine which agent should run next based on current state.
     Uses deterministic rules first, falls back to LLM for edge cases.
@@ -358,7 +358,7 @@ def get_supervisor_decision(state: dict) -> SupervisorDecision:
 
 
 @traceable(name="supervisor", run_type="chain")
-def supervisor_node(state: dict) -> dict:
+def supervisor_node(state: ReportState) -> ReportState:
     """
     LangGraph node for the Supervisor agent.
     Reads current state and decides which agent to call next.

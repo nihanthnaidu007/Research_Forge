@@ -71,7 +71,7 @@ def extract_url_chunks(url: str) -> list[dict]:
     Fetch URL content via httpx, parse with BeautifulSoup.
     Split into chunks of ~500 words each.
     """
-    chunks = []
+    chunks: list[dict] = []
     is_safe, reason = validate_url(url)
     if not is_safe:
         logger.warning(f"Skipping unsafe URL in document agent: {reason}")
