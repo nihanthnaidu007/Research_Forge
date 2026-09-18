@@ -16,6 +16,14 @@ export const AGENTS = [
 // unnecessary re-renders and breaks DevTools time-travel.
 const _polling = { intervalId: null, errorCount: 0 };
 
+// Download filename extension when the response carries none: most
+// formats' ids are already their extension; markdown/bibtex/latex are not.
+const EXPORT_FALLBACK_EXT = {
+  markdown: 'md',
+  bibtex: 'bib',
+  latex: 'tex',
+};
+
 const initialState = {
   sessionId: null,
   status: 'idle',
@@ -490,7 +498,7 @@ export const useStore = create((set, get) => ({
       throw new Error(errData.detail || `Export failed (${response.status})`);
     }
 
-    const fallbackExt = format === 'markdown' ? 'md' : format === 'bibtex' ? 'bib' : format;
+    const fallbackExt = EXPORT_FALLBACK_EXT[format] ?? format;
     return downloadResponseAsFile(
       response,
       `researchforge-report.${fallbackExt}`

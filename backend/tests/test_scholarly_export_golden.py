@@ -20,7 +20,9 @@ from export.docx_exporter import build_docx_report
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-SAMPLE_STATE = {
+# `dict` (Any-typed values) on purpose: a test fixture whose nested shapes
+# every exporter test indexes freely.
+SAMPLE_STATE: dict = {
     "topic": "Transformer architectures",
     "depth": "quick",
     "written_sections": [

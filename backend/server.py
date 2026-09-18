@@ -90,6 +90,7 @@ from eval.langsmith_tracer import (
     setup_tracing,
 )
 from export.bibtex_exporter import build_bibtex_report
+from export.latex_exporter import build_latex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
@@ -1769,6 +1770,41 @@ async def export_bibtex_endpoint(session_id: str):
     return Response(
         content=bibtex,
         media_type="application/x-bibtex; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post(
+    "/export-latex",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_latex_endpoint(session_id: str):
+    """Export the completed report as a self-contained LaTeX (.tex) download.
+
+    The document embeds its own thebibliography — no .bib sidecar — so the
+    single downloaded file compiles as-is.
+    """
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        latex = await asyncio.to_thread(build_latex_report, state)
+    except ValueError as e:
+        logger.error(
+            f"LaTeX export validation error for session {session_id}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=400, detail="LaTeX export failed — invalid report state"
+        ) from e
+
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, "tex"
+    )
+    logger.info(f"LaTeX exported for session {session_id}")
+
+    return Response(
+        content=latex,
+        media_type="application/x-latex; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, FileCode, FileDown, FileText, BookMarked } from 'lucide-react';
+import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, Braces, FileCode, FileDown, FileText, BookMarked } from 'lucide-react';
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
@@ -111,6 +111,7 @@ const EXPORT_FORMATS = [
   { format: 'html', label: 'HTML', icon: FileCode, testid: 'download-html-btn' },
   { format: 'docx', label: 'DOCX', icon: FileDown, testid: 'download-docx-btn' },
   { format: 'bibtex', label: 'BibTeX', icon: BookMarked, testid: 'download-bibtex-btn' },
+  { format: 'latex', label: 'LaTeX', icon: Braces, testid: 'download-latex-btn' },
 ];
 
 function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport }) {
