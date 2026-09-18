@@ -15,6 +15,23 @@ export const AGENTS = [
 // storing non-serializable timer IDs in state, which causes
 // unnecessary re-renders and breaks DevTools time-travel.
 const _polling = { intervalId: null, errorCount: 0 };
+// R4 live view: the SSE transport's AbortController. The stream replaces
+// interval polling while it is healthy; polling stays as the fallback.
+const _stream = { controller: null };
+
+/**
+ * Pure staleness rule for transport-driven writes (the stale-poll reset
+ * race). A terminal view state absorbs any later non-terminal payload for
+ * the same session: a status poll captured before completion can still
+ * arrive after the full report was fetched, and applying it would
+ * "downgrade" the finished report back to a running spinner. Terminal
+ * payloads never race each other here — completion and error are the only
+ * terminal states and they arrive once.
+ */
+export function isStaleTransportUpdate(currentStatus, incomingStatus) {
+  const terminal = (s) => s === 'complete' || s === 'error';
+  return terminal(currentStatus) && !terminal(incomingStatus);
+}
 
 // Download filename extension when the response carries none: most
 // formats' ids are already their extension; markdown/bibtex/latex are not.
@@ -226,7 +243,7 @@ export const useStore = create((set, get) => ({
       }
 
       set({ sessionId, sessionToken: data.session_token || null, isLoading: false });
-      get().startPolling(sessionId);
+      get().subscribeToStream(sessionId);
 
     } catch (err) {
       console.error('Start report error:', err);
@@ -273,6 +290,10 @@ export const useStore = create((set, get) => ({
 
         const data = await response.json();
 
+        // Stale-poll guard (R4): a response captured before completion can
+        // land after the full report did. A terminal view never downgrades.
+        if (isStaleTransportUpdate(get().status, data.status)) return;
+
         const stateUpdate = {
           status: data.status,
           currentAgent: data.current_agent || '',
@@ -290,6 +311,15 @@ export const useStore = create((set, get) => ({
           researchRounds: data.research_rounds || 0,
           coverageGaps: data.coverage_gaps || [],
         };
+
+        // Progress never rewinds: a poll response ordered before newer
+        // updates (or carrying fewer of them) must not shrink the log.
+        if (
+          Array.isArray(stateUpdate.streamUpdates) &&
+          stateUpdate.streamUpdates.length < (get().streamUpdates || []).length
+        ) {
+          delete stateUpdate.streamUpdates;
+        }
 
         if (data.status === 'waiting_approval' &&
             data.outline && data.outline.length > 0) {
@@ -364,6 +394,136 @@ export const useStore = create((set, get) => ({
 
     // Start the first poll immediately
     poll();
+  },
+
+  // R4 live view: subscribe to the server's SSE stream for real-time
+  // updates instead of interval polling. Fetch-based transport because the
+  // stream endpoint requires API-key headers (EventSource cannot set
+  // them) — fail-closed auth beats transport simplicity. The server ends
+  // the stream after a terminal `state` event, so this resolves by design
+  // when the run finishes; on network failure polling takes over.
+  subscribeToStream: async (sessionId) => {
+    if (!sessionId) return;
+
+    // Exactly one live transport: a new subscription supersedes any
+    // running stream and any poll loop.
+    if (_stream.controller) {
+      _stream.controller.abort();
+      _stream.controller = null;
+    }
+    if (_polling.intervalId) {
+      clearTimeout(_polling.intervalId);
+      _polling.intervalId = null;
+    }
+
+    const controller = new AbortController();
+    _stream.controller = controller;
+
+    const applyUpdateEvent = (event) => {
+      if (get().sessionId !== sessionId) return;
+      // Same staleness rule as the poll path: a terminal view never
+      // downgrades, and the update log never shrinks.
+      if (isStaleTransportUpdate(get().status, event.status)) return;
+
+      const current = get().streamUpdates || [];
+      const updates = event.message != null ? [...current, event.message] : current;
+      set({
+        status: event.status || get().status,
+        currentAgent: event.current_agent || '',
+        completedAgents: event.completed_agents || [],
+        streamUpdates: updates,
+      });
+    };
+
+    const applyStateEvent = (session) => {
+      if (get().sessionId !== sessionId) return;
+      const status = session.status;
+      if (isStaleTransportUpdate(get().status, status)) return;
+
+      const persisted = session.state || {};
+      if (status === 'waiting_approval') {
+        const outline = persisted.outline || [];
+        set({
+          status: 'waiting_approval',
+          isLoading: false,
+          ...(outline.length > 0 ? { outline } : {}),
+        });
+        return;
+      }
+      if (status === 'paused') {
+        set({ status: 'paused', isLoading: false });
+        return;
+      }
+      if (status === 'error') {
+        set({ status: 'error', error: persisted.error || 'An error occurred', isLoading: false });
+        return;
+      }
+      if (status === 'complete') {
+        set({ status: 'complete', isLoading: false, error: null });
+        get().fetchFullReport(sessionId);
+      }
+    };
+
+    try {
+      const response = await fetch(apiUrl(`/api/session/${sessionId}/stream`), {
+        headers: authHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream unavailable (${response.status})`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const handleDataLine = (line) => {
+        if (!line.startsWith('data: ')) return; // keepalive comments etc.
+        let event;
+        try {
+          event = JSON.parse(line.slice(6));
+        } catch {
+          console.error('SSE: malformed event payload');
+          return;
+        }
+        if (event.type === 'update') {
+          applyUpdateEvent(event);
+        } else if (event.type === 'state') {
+          applyStateEvent(event.session || {});
+        }
+      };
+
+      while (true) {
+        if (controller.signal.aborted || get().sessionId !== sessionId) return;
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          rawEvent.split('\n').forEach(handleDataLine);
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return; // superseded or session swapped
+      // The failure is surfaced, not swallowed: logged here and acted on
+      // below by falling back to polling, which carries the same guards.
+      console.error('SSE stream error, falling back to polling:', err);
+    } finally {
+      if (_stream.controller === controller) _stream.controller = null;
+    }
+
+    // The stream ended without a terminal state event (disconnect). If the
+    // session is still the live one and still running, take over with
+    // polling so the view keeps moving.
+    const status = get().status;
+    if (
+      get().sessionId === sessionId &&
+      !['complete', 'error', 'waiting_approval', 'paused'].includes(status)
+    ) {
+      get().startPolling(sessionId);
+    }
   },
 
   fetchFullReport: async (sessionId) => {
@@ -472,7 +632,7 @@ export const useStore = create((set, get) => ({
         approvedOutline: outlineToSend,
       });
 
-      get().startPolling(sessionId);
+      get().subscribeToStream(sessionId);
 
     } catch (err) {
       console.error('Approve outline error:', err);
@@ -517,6 +677,10 @@ export const useStore = create((set, get) => ({
     if (_polling.intervalId) {
       clearTimeout(_polling.intervalId);
       _polling.intervalId = null;
+    }
+    if (_stream.controller) {
+      _stream.controller.abort();
+      _stream.controller = null;
     }
 
     set({ reopenLoading: true, reopenError: null });
@@ -741,6 +905,9 @@ export const useStore = create((set, get) => ({
         // run driver consumes the resume; polling confirms within one
         // cadence, and the poll ACK-clearing above expects this transition.
         set({ steerAck: { command, at: Date.now() }, status: 'running' });
+        // The SSE stream ended when the run paused — re-subscribe so the
+        // live view continues streaming instead of falling back to polls.
+        get().subscribeToStream(sessionId);
       } else {
         set({ steerAck: { command, at: Date.now() } });
       }
@@ -762,6 +929,11 @@ export const useStore = create((set, get) => ({
       _polling.intervalId = null;
     }
     _polling.errorCount = 0;
+    // R4: the live transport must die with the session it belongs to.
+    if (_stream.controller) {
+      _stream.controller.abort();
+      _stream.controller = null;
+    }
 
     set({
       ...initialState,
