@@ -137,23 +137,42 @@ def get_session_token_hash(session_id: str) -> str | None:
     return row[0] if row else None
 
 
-def list_sessions(limit: int = 50, offset: int = 0) -> list[dict]:
+def list_sessions(limit: int = 50, offset: int = 0, query: str = "") -> list[dict]:
     """
     Return session metadata for the history view, newest first.
 
-    Deliberately excludes state and token material: the history listing is
-    the one endpoint that spans ALL sessions, so it must never carry report
-    content or ownership secrets.
+    Optional query filters by case-insensitive substring match on topic —
+    topic/title search only. Report bodies are never searched and never
+    returned: the history listing is the one endpoint that spans ALL
+    sessions, so it must never carry report content or ownership secrets.
     """
+    conditions = []
+    values: list[object] = []
+
+    if query:
+        # Literal substring match: escape LIKE metacharacters so a query of
+        # "100%" finds "100% guaranteed", not every topic containing "100".
+        escaped = (
+            query.replace("\\", "\\\\")
+            .replace("%", r"\%")
+            .replace("_", r"\_")
+        )
+        conditions.append("topic ILIKE %s ESCAPE '\\'")
+        values.append(f"%{escaped}%")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    values.extend([limit, offset])
+
     with get_pool().connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT id, topic, depth, status, created_at, updated_at
             FROM sessions
+            {where}
             ORDER BY created_at DESC
             LIMIT %s OFFSET %s
             """,
-            (limit, offset),
+            values,
         ).fetchall()
 
     return [

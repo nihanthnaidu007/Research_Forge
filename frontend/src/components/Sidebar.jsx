@@ -26,9 +26,21 @@ function StatCard({ icon: Icon, label, value, subtext }) {
   );
 }
 
+// Report template presets (W5). They shape outline STRUCTURE only: the
+// section count follows depth and synthesis length stays fixed — the copy
+// below tells the operator exactly that.
+const REPORT_TEMPLATES = [
+  { key: 'standard', label: 'Standard', description: 'The default report shape: background, current state, analysis, implications, conclusion.' },
+  { key: 'exec-brief', label: 'Exec Brief', description: 'Decision-first brief: findings, implications, recommended actions.' },
+  { key: 'journal-club', label: 'Journal Club', description: 'Seminar-style: approach, evidence quality, relation to prior work.' },
+  { key: 'deep-dive', label: 'Deep Dive', description: 'Mechanism-oriented: how it works, failure modes, open questions.' },
+  { key: 'systematic-lite', label: 'Systematic Lite', description: 'Structured, evidence-linked sections with explicit limitations. Not a formal systematic review.' },
+];
+
 export function Sidebar({ 
   topic, setTopic,
   depth, setDepth,
+  reportTemplate, setReportTemplate,
   inputUrls, addUrl, removeUrl,
   uploadedFiles, addFile, removeFile,
   onStartReport,
@@ -124,6 +136,29 @@ export function Sidebar({
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+          </div>
+          {/* Report Template Picker */}
+          <div className="space-y-2">
+            <Label className="text-xs text-zinc-400">Report Template</Label>
+            <Tabs value={reportTemplate} onValueChange={setReportTemplate} className="w-full">
+              <TabsList className="w-full flex-wrap h-auto bg-zinc-900 border border-zinc-800 gap-1 p-1">
+                {REPORT_TEMPLATES.map(({ key, label }) => (
+                  <TabsTrigger
+                    key={key}
+                    value={key}
+                    className="flex-1 min-w-[45%] text-xs data-[state=active]:bg-cyan-500/10 data-[state=active]:text-cyan-400"
+                    disabled={isRunning}
+                    data-testid={`template-${key}`}
+                  >
+                    {label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <p className="text-[10px] text-zinc-600 leading-snug" data-testid="template-description">
+              {REPORT_TEMPLATES.find(t => t.key === reportTemplate)?.description}
+              {' '}Presets shape outline structure only — section count follows depth and section length stays fixed.
+            </p>
           </div>
         </div>
         

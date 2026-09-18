@@ -142,13 +142,19 @@ def fake_db(monkeypatch):
         row = store.get(session_id)
         return row["token_hash"] if row else None
 
-    def list_sessions(limit=50, offset=0):
-        # Mirrors db.list_sessions: metadata only, newest first.
+    def list_sessions(limit=50, offset=0, query=""):
+        # Mirrors db.list_sessions: metadata only, newest first, optional
+        # case-insensitive topic filter. The SQL side escapes LIKE
+        # metacharacters; the visible behavior this fake reproduces is a
+        # literal case-folded substring match.
         rows = sorted(
             (copy.deepcopy(row["data"]) for row in store.values()),
             key=lambda row: row.get("created_at", ""),
             reverse=True,
         )
+        if query:
+            folded = query.casefold()
+            rows = [row for row in rows if folded in row["topic"].casefold()]
         return [
             {
                 "id": row["id"],

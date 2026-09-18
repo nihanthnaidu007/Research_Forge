@@ -1,6 +1,7 @@
-"""Auth and happy-path tests for the /export-docx and /export-bibtex endpoints.
+"""Auth and happy-path tests for the /export-docx, /export-bibtex, and
+/export-latex endpoints.
 
-Both endpoints reuse the W0-protected export flow: API key plus per-session
+All endpoints reuse the W0-protected export flow: API key plus per-session
 ownership token, the same guard chain as /api/export-md and /api/export-html.
 """
 
@@ -30,16 +31,16 @@ def _authed(client, path, sid, token="tok"):
     )
 
 
-# --- Auth guards (both endpoints) -----------------------------------------------
+# --- Auth guards (all endpoints) -----------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
 def test_export_requires_api_key(client, fake_db, path):
     response = client.post(path, params={"session_id": "s1"})
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
 def test_export_requires_session_token(client, fake_db, path):
     sid = _seed_complete(fake_db)
     response = client.post(
@@ -48,21 +49,21 @@ def test_export_requires_session_token(client, fake_db, path):
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
 def test_export_rejects_wrong_token(client, fake_db, path):
     sid = _seed_complete(fake_db)
     response = _authed(client, path, sid, token="wrong-token")
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
 def test_export_unknown_session_404(client, fake_db, path):
     seed_session(fake_db, token="tok", status="complete", state=SAMPLE_STATE)
     response = _authed(client, path, "missing-session")
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex"])
+@pytest.mark.parametrize("path", ["/api/export-docx", "/api/export-bibtex", "/api/export-latex"])
 def test_export_rejects_incomplete_report(client, fake_db, path):
     waiting = dict(SAMPLE_STATE, written_sections=[])
     sid = _seed_complete(fake_db, status="waiting_approval", state=waiting)
@@ -71,6 +72,21 @@ def test_export_rejects_incomplete_report(client, fake_db, path):
 
 
 # --- Happy paths -----------------------------------------------------------------
+
+
+def test_latex_export_happy_path(client, fake_db):
+    sid = _seed_complete(fake_db)
+
+    response = _authed(client, "/api/export-latex", sid)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-latex")
+    assert "attachment" in response.headers["content-disposition"]
+    assert ".tex" in response.headers["content-disposition"]
+    # Body is the self-contained document for the seeded state.
+    assert response.text.startswith("\\documentclass")
+    assert "\\begin{thebibliography}" in response.text
+    assert response.text.rstrip().endswith("\\end{document}")
 
 
 def test_bibtex_export_happy_path(client, fake_db):

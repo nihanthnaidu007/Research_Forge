@@ -16,11 +16,22 @@ export const AGENTS = [
 // unnecessary re-renders and breaks DevTools time-travel.
 const _polling = { intervalId: null, errorCount: 0 };
 
+// Download filename extension when the response carries none: most
+// formats' ids are already their extension; markdown/bibtex/latex are not.
+const EXPORT_FALLBACK_EXT = {
+  markdown: 'md',
+  bibtex: 'bib',
+  latex: 'tex',
+};
+
 const initialState = {
   sessionId: null,
   status: 'idle',
   topic: '',
   depth: 'quick',
+  // Report template preset (W5): shapes outline structure only — section
+  // count follows depth and synthesis length stays fixed.
+  reportTemplate: 'standard',
   inputUrls: [],
   uploadedFiles: [],
   currentAgent: '',
@@ -65,6 +76,7 @@ export const useStore = create((set, get) => ({
 
   setTopic: (topic) => set({ topic }),
   setDepth: (depth) => set({ depth }),
+  setReportTemplate: (template) => set({ reportTemplate: template }),
 
   addUrl: (url) => set((state) => ({
     inputUrls: [...state.inputUrls, url]
@@ -91,7 +103,7 @@ export const useStore = create((set, get) => ({
   }),
 
   startReport: async () => {
-    const { topic, depth, inputUrls } = get();
+    const { topic, depth, reportTemplate, inputUrls } = get();
 
     if (!topic || !topic.trim() || topic.trim().length < 3) {
       set({ error: 'Please enter a research topic (minimum 3 characters)' });
@@ -168,6 +180,7 @@ export const useStore = create((set, get) => ({
           body: JSON.stringify({
             topic: topic.trim(),
             depth: depth || 'quick',
+            template: reportTemplate || 'standard',
             input_urls: parsedUrls,
             uploaded_pdfs: uploadedPdfPaths,
           }),
@@ -454,12 +467,16 @@ export const useStore = create((set, get) => ({
     }
   },
 
-  fetchHistory: async () => {
+  fetchHistory: async (query = '') => {
+    // Optional topic search (W5): server-side filter over session topics.
     set({ historyLoading: true, historyError: null });
     try {
-      const response = await fetch(apiUrl('/api/history'), {
-        headers: authHeaders(),
-      });
+      const response = await fetch(
+        apiUrl(`/api/history${query ? `?q=${encodeURIComponent(query)}` : ''}`),
+        {
+          headers: authHeaders(),
+        }
+      );
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.detail || `Failed to load history (${response.status})`);
@@ -490,7 +507,7 @@ export const useStore = create((set, get) => ({
       throw new Error(errData.detail || `Export failed (${response.status})`);
     }
 
-    const fallbackExt = format === 'markdown' ? 'md' : format === 'bibtex' ? 'bib' : format;
+    const fallbackExt = EXPORT_FALLBACK_EXT[format] ?? format;
     return downloadResponseAsFile(
       response,
       `researchforge-report.${fallbackExt}`

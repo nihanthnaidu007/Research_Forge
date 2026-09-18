@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { History, RefreshCw, AlertTriangle, FileText } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { History, RefreshCw, AlertTriangle, FileText, Search } from 'lucide-react';
 import { useStore } from '../store';
 
 const STATUS_STYLES = {
@@ -69,9 +69,23 @@ export function HistoryPanel() {
   const historyError = useStore((s) => s.historyError);
   const fetchHistory = useStore((s) => s.fetchHistory);
 
+  // Topic search (W5): debounced server-side query. While searching, the
+  // 8-row display cap is lifted — hiding server-filtered matches behind a
+  // client-side slice would make the panel lie about what it found.
+  const [search, setSearch] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
+
   useEffect(() => {
-    fetchHistory();
-  }, [fetchHistory]);
+    const t = setTimeout(() => setSearchDebounced(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    fetchHistory(searchDebounced);
+  }, [fetchHistory, searchDebounced]);
+
+  const searching = searchDebounced.trim().length > 0;
+  const visible = searching ? history : history.slice(0, 8);
 
   return (
     <div className="space-y-3" data-testid="history-panel">
@@ -81,13 +95,25 @@ export function HistoryPanel() {
           Report History
         </h3>
         <button
-          onClick={() => fetchHistory()}
+          onClick={() => fetchHistory(searchDebounced)}
           className="text-zinc-600 hover:text-cyan-400 transition-colors"
           data-testid="history-refresh-btn"
           aria-label="Refresh history"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
         </button>
+      </div>
+
+      <div className="relative">
+        <Search className="w-3 h-3 text-zinc-600 absolute left-2 top-1/2 -translate-y-1/2" strokeWidth={1.5} />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search topics..."
+          className="w-full pl-7 pr-2 py-1.5 text-xs rounded-sm bg-zinc-950 border border-zinc-800 focus:border-cyan-500/50 focus:outline-none text-zinc-300 placeholder:text-zinc-600"
+          data-testid="history-search-input"
+        />
       </div>
 
       {historyError && (
@@ -98,16 +124,18 @@ export function HistoryPanel() {
       )}
 
       {!historyLoading && !historyError && history.length === 0 && (
-        <p className="text-xs text-zinc-600 px-1">No reports yet.</p>
+        <p className="text-xs text-zinc-600 px-1">
+          {searching ? 'No matching reports.' : 'No reports yet.'}
+        </p>
       )}
 
       <div className="space-y-2">
-        {history.slice(0, 8).map((entry) => (
+        {visible.map((entry) => (
           <HistoryRow key={entry.id} entry={entry} />
         ))}
       </div>
 
-      {history.length > 8 && (
+      {!searching && history.length > 8 && (
         <p className="text-[10px] font-mono text-zinc-600 px-1">
           +{history.length - 8} older reports
         </p>
