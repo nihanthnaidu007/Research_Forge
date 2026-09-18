@@ -39,6 +39,9 @@ const EXPORT_FALLBACK_EXT = {
   markdown: 'md',
   bibtex: 'bib',
   latex: 'tex',
+  'csl-apa': 'apa.txt',
+  'csl-mla': 'mla.txt',
+  'csl-ieee': 'ieee.txt',
 };
 
 const initialState = {
@@ -758,15 +761,23 @@ export const useStore = create((set, get) => ({
   },
 
   exportReport: async (format) => {
-    // format: 'pdf' | 'markdown' | 'html' | 'docx' | 'bibtex'
+    // format: 'pdf' | 'markdown' | 'html' | 'docx' | 'bibtex' | 'latex'
+    //         | 'csl-apa' | 'csl-mla' | 'csl-ieee'
     const { sessionId, sessionToken } = get();
     if (!sessionId || !sessionToken) {
       throw new Error('No active session to export');
     }
 
-    const endpoint = `/api/export-${format}`;
+    // CSL styles share one backend endpoint that switches on a style param.
+    const isCsl = format.startsWith('csl-');
+    const endpoint = isCsl ? '/api/export-csl' : `/api/export-${format}`;
+    const styleParam = isCsl
+      ? `&style=${encodeURIComponent(format.slice(4))}`
+      : '';
     const response = await fetch(
-      apiUrl(`${endpoint}?session_id=${encodeURIComponent(sessionId)}`),
+      apiUrl(
+        `${endpoint}?session_id=${encodeURIComponent(sessionId)}${styleParam}`
+      ),
       { method: 'POST', headers: authHeaders(sessionToken) }
     );
 

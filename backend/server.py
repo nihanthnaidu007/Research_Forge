@@ -90,6 +90,7 @@ from eval.langsmith_tracer import (
     setup_tracing,
 )
 from export.bibtex_exporter import build_bibtex_report
+from export.csl_exporter import build_csl_bibliography
 from export.latex_exporter import build_latex_report
 from export.markdown_exporter import build_html_report, build_markdown_report
 from graph.agents.templates import DEFAULT_TEMPLATE, TEMPLATE_PATTERN
@@ -1781,6 +1782,37 @@ async def export_bibtex_endpoint(session_id: str):
     return Response(
         content=bibtex,
         media_type="application/x-bibtex; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.post(
+    "/export-csl",
+    dependencies=[Depends(require_api_key), Depends(require_session_ownership)],
+)
+async def export_csl_endpoint(session_id: str, style: str = "apa"):
+    """Export the report's citations as a CSL-styled bibliography download.
+
+    Styles: apa (APA 7), mla (MLA 9), ieee (IEEE). Deterministic in-repo
+    formatting — no citeproc-py or pandoc dependency.
+    """
+    session = await asyncio.to_thread(get_session, session_id)
+    state = _get_completed_session_state(session)
+
+    try:
+        csl = await asyncio.to_thread(build_csl_bibliography, state, style)
+    except ValueError as e:
+        logger.error(f"CSL export validation error for session {session_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    filename = _export_attachment_filename(
+        state.get("topic", "report"), session_id, f"{style}.txt"
+    )
+    logger.info(f"CSL ({style}) exported for session {session_id}")
+
+    return Response(
+        content=csl,
+        media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

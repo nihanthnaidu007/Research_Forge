@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, Braces, FileCode, FileDown, FileText, BookMarked, Lock } from 'lucide-react';
+import { Hexagon, Zap, Download, Loader2, RotateCcw, AlertTriangle, Braces, FileCode, FileDown, FileText, BookMarked, Lock, Quote } from 'lucide-react';
 import { Button } from './ui/button';
 import OutlineApprovalZone from './OutlineApproval';
 import ReportOutput from './ReportOutput';
@@ -131,6 +131,9 @@ const EXPORT_FORMATS = [
   { format: 'docx', label: 'DOCX', icon: FileDown, testid: 'download-docx-btn' },
   { format: 'bibtex', label: 'BibTeX', icon: BookMarked, testid: 'download-bibtex-btn' },
   { format: 'latex', label: 'LaTeX', icon: Braces, testid: 'download-latex-btn' },
+  { format: 'csl-apa', label: 'Bibliography (APA)', icon: Quote, testid: 'download-csl-apa-btn' },
+  { format: 'csl-mla', label: 'Bibliography (MLA)', icon: Quote, testid: 'download-csl-mla-btn' },
+  { format: 'csl-ieee', label: 'Bibliography (IEEE)', icon: Quote, testid: 'download-csl-ieee-btn' },
 ];
 
 function CompletedState({ sessionId, writtenSections, confidenceScores, sources, overallConfidence, onReset, versioningReport, onExport, restored, factCheckResults, coverageGaps }) {
