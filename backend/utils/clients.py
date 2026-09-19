@@ -6,10 +6,15 @@ This ensures a single HTTP connection pool per provider across all agents.
 LLM provider selection (LLM_PROVIDER):
 - "anthropic" (default): the OpenAI SDK talks to Anthropic's OpenAI-compatible
   endpoint (base_url https://api.anthropic.com/v1/) with an ANTHROPIC_API_KEY.
-  Verified against Anthropic's OpenAI SDK compatibility docs: chat.completions,
+  Verified live 2026-09-19 against the endpoint: chat.completions,
   max_completion_tokens, stream, and usage.{prompt,completion,total}_tokens
-  are fully supported; response_format is silently ignored (prompts already
-  enforce JSON-only output, and parsing is fence-tolerant — utils/llm_utils.py).
+  are fully supported; response_format {"type": "json_object"} is rejected
+  with HTTP 400 ("response_format.type: Input should be 'json_schema'") and
+  the json_schema alternative requires strict: true, so there is no drop-in
+  mapping — chat_completion_with_usage therefore strips that one mode for
+  this provider (normalize_llm_request_kwargs). JSON-only output stays
+  enforced by prompt instruction, and parsing is fence-tolerant
+  (utils/llm_utils.py).
 - "openai": the original OpenAI path (OPENAI_API_KEY), fully preserved.
 
 Tavily is optional: without TAVILY_API_KEY, get_tavily_client() returns None
@@ -20,6 +25,7 @@ message if required keys are absent.
 
 import logging
 import os
+from typing import Any
 
 from openai import OpenAI
 from tavily import TavilyClient
@@ -130,6 +136,30 @@ def usage_total_tokens(usage: object) -> int | None:
     return None
 
 
+def normalize_llm_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize chat.completions.create kwargs for the configured provider.
+
+    LLM_PROVIDER=anthropic (OpenAI-compat endpoint): response_format
+    {"type": "json_object"} is rejected with HTTP 400 — "response_format.type:
+    Input should be 'json_schema'" — and the json_schema alternative requires
+    strict: true plus a full schema, so there is no drop-in mapping for
+    json_object mode. Verified live 2026-09-19. The call sites that request
+    json_object already enforce JSON-only output by prompt instruction and
+    parse fence-tolerantly (utils/llm_utils.extract_json_object), so exactly
+    that one mode is stripped; any other response_format value (e.g. a future
+    strict json_schema) passes through untouched. LLM_PROVIDER=openai
+    receives kwargs unchanged.
+    """
+    if llm_provider() == "openai":
+        return kwargs
+    response_format = kwargs.get("response_format")
+    if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+        logger.debug("Stripping response_format json_object for anthropic provider")
+        return {key: value for key, value in kwargs.items() if key != "response_format"}
+    return kwargs
+
+
 def chat_completion_with_usage(**kwargs):
     """
     Create a chat completion and record token usage against the active run's
@@ -138,8 +168,17 @@ def chat_completion_with_usage(**kwargs):
     Drop-in replacement for get_openai_client().chat.completions.create():
     same arguments, same response, plus per-run usage accounting. Usage is
     only recorded when a run context is active (set by the graph runners).
+
+    Request kwargs are normalized per provider before dispatch
+    (normalize_llm_request_kwargs): under LLM_PROVIDER=anthropic the
+    OpenAI-compat endpoint rejects response_format {"type": "json_object"}
+    with HTTP 400, so that mode is stripped — JSON-only output is enforced
+    by prompt instruction and fence-tolerant parsing; under
+    LLM_PROVIDER=openai kwargs pass through unchanged.
     """
-    response = get_openai_client().chat.completions.create(**kwargs)
+    response = get_openai_client().chat.completions.create(
+        **normalize_llm_request_kwargs(kwargs)
+    )
     total_tokens = usage_total_tokens(getattr(response, "usage", None))
     if total_tokens:
         token_budget.record_usage_for_current_session(int(total_tokens))

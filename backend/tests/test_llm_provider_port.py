@@ -19,6 +19,7 @@ from graph import graph as graph_module
 from graph.agents import citations as citations_module
 from graph.agents import research as research_module
 from graph.agents.factcheck import extract_claims_from_research
+from graph.agents.factcheck_parallel import judge_single_claim_parallel
 from graph.agents.outline import generate_outline
 from graph.state import create_initial_state
 from utils import clients, preflight, token_budget
@@ -267,7 +268,7 @@ def test_chat_completion_records_anthropic_shaped_usage(monkeypatch):
         token_budget.release_budget("sess-anthropic-usage")
 
 
-# --- D1: fence-tolerant JSON (compat layer ignores response_format) -------
+# --- D1: fence-tolerant JSON (anthropic path strips response_format) -------
 
 
 def test_extract_json_object_accepts_raw_json():
@@ -606,3 +607,157 @@ def test_run_fails_fast_with_typed_preflight_error(client, fake_db, monkeypatch)
     data = fake_db[session_id]["data"]
     assert data["status"] == "error"
     assert "LLM provider unavailable" in data["state"]["error"]
+
+
+# --- response_format normalization: anthropic strips, openai passes through
+#
+# Live check 2026-09-19 (claude-haiku-4-5-20251001 via api.anthropic.com/v1/):
+#   response_format {"type": "json_object"} -> HTTP 400,
+#     "response_format.type: Input should be 'json_schema'"
+#   no response_format                       -> 200, fenced JSON (parser-safe)
+#   {"type": "json_schema"} without strict   -> HTTP 400, "strict: Field required"
+# So json_object cannot be mapped to json_schema drop-in; it is stripped.
+
+
+def test_anthropic_strips_json_object_response_format(monkeypatch):
+    """json_object mode is the exact form the compat endpoint 400s on — under
+    the anthropic provider it must never reach the client, and the call must
+    succeed without it."""
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response('{"ok": true}', _AnthropicUsage(5, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+
+    response = clients.chat_completion_with_usage(
+        model="claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        response_format={"type": "json_object"},
+    )
+
+    assert response.choices[0].message.content == '{"ok": true}'
+    assert len(completions.kwargs_log) == 1
+    assert "response_format" not in completions.kwargs_log[0]
+
+
+def test_anthropic_passes_other_response_format_through(monkeypatch):
+    """Only the rejected json_object mode is stripped; other forms (a future
+    strict json_schema) must not be silently dropped."""
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response("ok", _AnthropicUsage(5, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+    strict_schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "response",
+            "strict": True,
+            "schema": {"type": "object"},
+        },
+    }
+
+    clients.chat_completion_with_usage(
+        model="claude-haiku-4-5-20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        response_format=strict_schema,
+    )
+
+    assert completions.kwargs_log[0]["response_format"] is strict_schema
+
+
+def test_openai_receives_response_format_unchanged(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response("ok", _AnthropicUsage(5, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+
+    clients.chat_completion_with_usage(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        response_format={"type": "json_object"},
+    )
+
+    assert completions.kwargs_log[0]["response_format"] == {"type": "json_object"}
+
+
+# --- call sites keep their parsers under the anthropic provider ------------
+
+
+def test_outline_call_site_sends_no_response_format_under_anthropic(monkeypatch):
+    sections_payload = json.dumps(
+        {
+            "sections": [
+                {
+                    "section_id": "sec_1",
+                    "title": "Grounded Title",
+                    "description": "D",
+                    "order": 1,
+                }
+            ]
+        }
+    )
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response(sections_payload, _AnthropicUsage(10, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+
+    outline = generate_outline(
+        topic="Topic",
+        depth="quick",
+        fact_check_results=[],
+        research_results=[],
+    )
+
+    assert outline[0]["title"] == "Grounded Title"  # existing parser path intact
+    assert "response_format" not in completions.kwargs_log[0]
+
+
+def test_extract_claims_call_site_sends_no_response_format_under_anthropic(monkeypatch):
+    claims_payload = json.dumps({"claims": ["Claim A", "Claim B"]})
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response(claims_payload, _AnthropicUsage(10, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+
+    claims = extract_claims_from_research(
+        [{"source_domain": "example.com", "snippet": "s" * 60}]
+    )
+
+    assert claims == ["Claim A", "Claim B"]
+    assert "response_format" not in completions.kwargs_log[0]
+
+
+def test_judge_verdict_derived_from_llm_comparison_not_fallback(monkeypatch):
+    """The verdict must be the model's computed comparison of claim vs sources —
+    never the API-error fallback shape (UNSUPPORTED @ 0.2, empty URLs) and not
+    the 0.5 parser default."""
+    verdict_payload = json.dumps(
+        {
+            "verdict": "PARTIALLY_SUPPORTED",
+            "confidence": 0.75,
+            "reasoning": "one source corroborates, another contradicts",
+            "supporting_urls": ["https://example.com/src"],
+        }
+    )
+    completions = _FakeCompletions(
+        lambda kwargs: _fake_response(verdict_payload, _AnthropicUsage(10, 5))
+    )
+    monkeypatch.setattr(clients, "get_openai_client", lambda: _FakeClient(completions))
+
+    result = judge_single_claim_parallel(
+        "Solar output rose 4% in 2026",
+        [
+            {
+                "source_domain": "example.com",
+                "url": "https://example.com/src",
+                "snippet": "Solar output rose roughly four percent in 2026. " * 5,
+            }
+        ],
+    )
+
+    assert result["verdict"] == "PARTIALLY_SUPPORTED"
+    assert result["confidence"] == 0.75
+    assert result["reasoning"] == "one source corroborates, another contradicts"
+    assert result["supporting_urls"] == ["https://example.com/src"]
+    assert (result["verdict"], result["confidence"]) != ("UNSUPPORTED", 0.2)
+    assert "response_format" not in completions.kwargs_log[0]
