@@ -297,3 +297,97 @@ describe('SSE live view', () => {
     expect(useStore.getState().streamUpdates).toEqual([]);
   });
 });
+
+describe('fetchFullReport fact-check verdicts', () => {
+  // Mirror of the backend verdict element shape (factcheck_parallel.py:
+  // judge_single_claim_parallel returns claim/verdict/confidence dicts).
+  const VERDICTS = [
+    {
+      claim: 'Compound X inhibits enzyme Y [1].',
+      verdict: 'SUPPORTED',
+      confidence: 0.82,
+      reasoning: 'The cited source states the inhibition directly.',
+    },
+    {
+      claim: 'Compound Z is toxic [2].',
+      verdict: 'UNSUPPORTED',
+      confidence: 0.2,
+      reasoning: 'No cited source supports the toxicity claim.',
+    },
+  ];
+
+  const COMPLETE_WITH_VERDICTS = {
+    ...COMPLETE_SESSION,
+    state: {
+      ...COMPLETE_SESSION.state,
+      fact_check_results: VERDICTS,
+    },
+  };
+
+  it('maps fact_check_results from the completion payload into the live store', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (String(url).endsWith(`/api/session/${SESSION_ID}`)) {
+          return Promise.resolve(jsonResponse(200, COMPLETE_WITH_VERDICTS));
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'unexpected' }));
+      })
+    );
+
+    await useStore.getState().fetchFullReport(SESSION_ID);
+
+    // The live view's FACT-CHECK VERDICTS panel reads exactly this state —
+    // it must carry the verdicts without a history reopen.
+    expect(useStore.getState().factCheckResults).toEqual(VERDICTS);
+  });
+
+  it('degrades factCheckResults to [] when the payload omits the field', async () => {
+    // Regression guard for the silent drop: an absent field must resolve to
+    // an empty array (matching the reopen path's shape), never throw and
+    // never leave a stale value behind.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (String(url).endsWith(`/api/session/${SESSION_ID}`)) {
+          return Promise.resolve(jsonResponse(200, COMPLETE_SESSION));
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'unexpected' }));
+      })
+    );
+
+    await expect(
+      useStore.getState().fetchFullReport(SESSION_ID)
+    ).resolves.not.toThrow();
+    expect(useStore.getState().factCheckResults).toEqual([]);
+  });
+
+  it('regression: the SSE terminal state renders verdicts without a history reopen', async () => {
+    // The primary first-run journey: stream completes on the live view,
+    // fetchFullReport resolves against the completion payload, and the
+    // verdict panel is populated — no reopen from history required.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url) => {
+        if (String(url).includes('/stream')) {
+          return Promise.resolve(
+            sseResponse([
+              `data: ${JSON.stringify({ type: 'state', session: COMPLETE_WITH_VERDICTS })}\n\n`,
+            ])
+          );
+        }
+        if (String(url).endsWith(`/api/session/${SESSION_ID}`)) {
+          return Promise.resolve(jsonResponse(200, COMPLETE_WITH_VERDICTS));
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'unexpected' }));
+      })
+    );
+
+    await useStore.getState().subscribeToStream(SESSION_ID);
+
+    const state = useStore.getState();
+    expect(state.status).toBe('complete');
+    expect(state.sessionRestored).toBe(false); // live view, not a history reopen
+    expect(state.factCheckResults).toEqual(VERDICTS);
+  });
+});

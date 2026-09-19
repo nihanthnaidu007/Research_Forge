@@ -558,6 +558,7 @@ export const useStore = create((set, get) => ({
         sources: state.sources || [],
         confidenceScores: state.confidence_scores || {},
         overallConfidence: state.overall_confidence || 0,
+        factCheckResults: state.fact_check_results || [],
         versioning_report: data.versioning_report || get().versioning_report || null,
       });
     } catch (err) {
