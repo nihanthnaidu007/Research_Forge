@@ -109,7 +109,11 @@ from graph.graph import get_checkpointer, get_graph
 from graph.state import create_initial_state
 from graph.supervisor import max_research_rounds
 from utils import token_budget
-from utils.clients import validate_env_vars
+from utils.clients import llm_model, llm_provider, validate_env_vars
+from utils.preflight import (
+    LLMProviderUnavailableError,
+    verify_llm_provider,
+)
 from utils.validation import validate_url
 
 limiter = Limiter(key_func=get_remote_address)
@@ -329,12 +333,18 @@ async def health_check():
             "synthesis",
             "citations",
         ],
-        "model": "gpt-4o",
+        "model": llm_model(),
         "checks": {},
     }
 
-    # Check required env vars
-    required = ["OPENAI_API_KEY", "TAVILY_API_KEY", "DATABASE_URL", "CORS_ORIGINS"]
+    # Check required env vars — the LLM credential is provider-specific
+    # (ANTHROPIC_API_KEY by default, OPENAI_API_KEY for LLM_PROVIDER=openai)
+    # and Tavily is optional: web search skips with a run-visible note when
+    # the key is absent, scholarly retrieval carries the run.
+    required = ["DATABASE_URL", "CORS_ORIGINS"]
+    required.append(
+        "OPENAI_API_KEY" if llm_provider() == "openai" else "ANTHROPIC_API_KEY"
+    )
     missing = [v for v in required if not os.getenv(v, "").strip()]
     health["checks"]["env_vars"] = (
         "ok" if not missing else f"missing: {', '.join(missing)}"
@@ -466,6 +476,26 @@ async def run_graph_async(session_id: str):
     token_budget.ensure_budget(session_id)
     session_ctx = token_budget.set_session_context(session_id)
     try:
+        # Provider preflight (D3): fail the run immediately, before the graph
+        # burns tokens on calls that cannot succeed (repeated 401s degrading
+        # every section into fallback content). Reuses the standard terminal
+        # error surface — status="error" + state.error — so the frontend
+        # renders it like any other failed run, with no new API shapes.
+        try:
+            await asyncio.to_thread(verify_llm_provider)
+        except LLMProviderUnavailableError as preflight_error:
+            logger.error(f"Session {session_id}: {preflight_error}")
+            token_budget.release_budget(session_id)
+            existing = await asyncio.to_thread(get_session, session_id)
+            if existing:
+                existing["state"]["error"] = str(preflight_error)
+                await asyncio.to_thread(
+                    update_session,
+                    session_id,
+                    {"status": "error", "state": existing["state"]},
+                )
+            return
+
         graph = get_graph()
         state = session["state"]
 

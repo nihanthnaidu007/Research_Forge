@@ -23,11 +23,9 @@ active budget via the session ContextVar (utils/token_budget.py).
 import re
 from typing import Any, NamedTuple
 
-from utils.clients import chat_completion_with_usage
+from utils.clients import chat_completion_with_usage, llm_model
 from utils.llm_utils import call_with_retry
 
-# Consistent with the agent models (synthesis.py, supervisor.py).
-CHAT_MODEL = "gpt-4o"
 CHAT_TEMPERATURE = 0.3
 CHAT_MAX_COMPLETION_TOKENS = 800
 
@@ -194,7 +192,7 @@ def run_chat_turn(state: dict, user_message: str) -> dict:
     """
     response = call_with_retry(
         lambda: chat_completion_with_usage(
-            model=CHAT_MODEL,
+            model=llm_model(),
             temperature=CHAT_TEMPERATURE,
             max_completion_tokens=CHAT_MAX_COMPLETION_TOKENS,
             messages=build_chat_messages(state, user_message),

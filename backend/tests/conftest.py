@@ -24,6 +24,8 @@ if str(BACKEND_DIR) not in sys.path:
 # Configure environment BEFORE importing server.py (import-time reads).
 TEST_API_KEY = "test-api-key-12345"
 for _var, _value in {
+    "LLM_PROVIDER": "anthropic",
+    "ANTHROPIC_API_KEY": "test-anthropic-key",
     "OPENAI_API_KEY": "test-openai-key",
     "TAVILY_API_KEY": "test-tavily-key",
     "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
@@ -74,12 +76,18 @@ class FakeGraph:
 @pytest.fixture(autouse=True)
 def test_environment(monkeypatch):
     """Deterministic env for every test (mirrors the import-time values)."""
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     monkeypatch.setenv("CORS_ORIGINS", "http://localhost:3000")
     monkeypatch.setenv("RESEARCHFORGE_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("RUN_TOKEN_BUDGET", "")
+    # Disable the LLM provider preflight for the general suite: it would make
+    # a real provider call inside FakeGraph lifecycle tests. Provider-port
+    # tests that exercise preflight set their own TTL explicitly.
+    monkeypatch.setenv("LLM_PREFLIGHT_TTL_SECONDS", "-1")
     yield
 
 

@@ -17,8 +17,6 @@ from graph.state import ReportState, without_parallel_fact_results
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o"
-
 # --- Deep-research loop thresholds (W4) ---
 # Read at call time so tests and deployments can tune them without a rebuild.
 

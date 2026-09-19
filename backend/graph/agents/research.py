@@ -44,7 +44,7 @@ def perform_tavily_search(
 
     for attempt in range(retries + 1):
         try:
-            results = get_tavily_client().search(
+            results = tavily_client.search(
                 query=query,
                 search_depth="advanced",
                 max_results=max_results,
@@ -164,20 +164,42 @@ def research_node(state: ReportState) -> ReportState:
         all_results = []
         seen_urls = set()
 
+        # Tavily is optional (D2): an absent key means the web-search leg is
+        # skipped entirely — no per-query calls, no retry burn — and the run
+        # is carried by scholarly retrieval with a run-visible note.
+        tavily_available = get_tavily_client() is not None
         web_results = []
-        for query in queries:
-            state["stream_updates"].append(
-                f"[{timestamp}] Research Agent → Searching: {query[:50]}..."
-            )
-            results = perform_tavily_search(
-                query, stream_updates=state["stream_updates"], timestamp=timestamp
-            )
+        if tavily_available:
+            for query in queries:
+                state["stream_updates"].append(
+                    f"[{timestamp}] Research Agent → Searching: {query[:50]}..."
+                )
+                results = perform_tavily_search(
+                    query, stream_updates=state["stream_updates"], timestamp=timestamp
+                )
 
-            # Deduplicate by URL
-            for result in results:
-                if result["url"] not in seen_urls:
-                    seen_urls.add(result["url"])
-                    web_results.append(result)
+                # Deduplicate by URL
+                for result in results:
+                    if result["url"] not in seen_urls:
+                        seen_urls.add(result["url"])
+                        web_results.append(result)
+        else:
+            skip_note = (
+                "Web search unavailable: TAVILY_API_KEY is not set — research "
+                "continues with scholarly sources only (Semantic Scholar, arXiv, Crossref)"
+            )
+            state["stream_updates"].append(
+                f"[{timestamp}] Research Agent → ⚠ {skip_note}"
+            )
+            # Honest coverage surface: this report has no web-search leg.
+            # Informational only — the supervisor recomputes actionable gaps
+            # from confidence/verdicts, so this entry never drives a
+            # re-research round on its own (apply_research_round overwrites
+            # coverage_gaps when a genuine gap trips).
+            gaps = list(state.get("coverage_gaps") or [])
+            if skip_note not in gaps:
+                gaps.append(skip_note)
+            state["coverage_gaps"] = gaps
 
         # Scholarly sources run in parallel (one thread per API) and degrade
         # independently: a source that fails is skipped, research continues
@@ -220,15 +242,20 @@ def research_node(state: ReportState) -> ReportState:
             # An empty RE-round is soft: earlier rounds' sources remain, the
             # flagged sections re-synthesize from them, and the round cap
             # bounds any further looping.
+            searched = (
+                "Tavily and the scholarly APIs (Semantic Scholar, arXiv, Crossref)"
+                if tavily_available
+                else "the scholarly APIs (Semantic Scholar, arXiv, Crossref — "
+                "web search is disabled because TAVILY_API_KEY is not set)"
+            )
             state["error"] = (
-                "Research returned no results after searching Tavily and the "
-                "scholarly APIs (Semantic Scholar, arXiv, Crossref). "
-                "Possible causes: invalid TAVILY_API_KEY, network connectivity issue, or proxy blocking outbound requests. "
-                "Check backend/.env and network settings."
+                f"Research returned no results after searching {searched}. "
+                "Possible causes: network connectivity issue, rate limiting, or "
+                "a proxy blocking outbound requests. Check backend/.env and network settings."
             )
             state["stream_updates"].append(
-                f"[{timestamp}] \u2717 Research Agent \u2192 No results found. Check TAVILY_API_KEY and network. "
-                f"Attempt {state['retry_count']} of 3."
+                f"[{timestamp}] \u2717 Research Agent \u2192 No results found. Check network "
+                f"and provider configuration. Attempt {state['retry_count']} of 3."
             )
         elif is_re_round:
             state["stream_updates"].append(
