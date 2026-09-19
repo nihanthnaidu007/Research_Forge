@@ -25,9 +25,11 @@ def extract_json_object(content: str) -> dict:
     """
     Parse a JSON object from an LLM response, tolerating code fences.
 
-    Anthropic's OpenAI-compatible endpoint ignores response_format
-    (documented behavior), so JSON-only prompts are enforced by instruction
-    alone. Claude occasionally wraps the object in ```json fences anyway;
+    The anthropic provider path strips response_format json_object before
+    dispatch (the OpenAI-compat endpoint rejects it with HTTP 400 — see
+    utils.clients.normalize_llm_request_kwargs), so JSON-only prompts are
+    enforced by instruction alone. Claude occasionally wraps the object in
+    ```json fences anyway;
     this accepts both raw JSON and fenced output. Raises json.JSONDecodeError
     (or ValueError) when no JSON object can be recovered — callers keep
     their existing fallback behavior.
