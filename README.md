@@ -97,7 +97,8 @@ Docker is used only to provide Postgres.
 - Python 3.11+
 - Node.js 20+ with Yarn
 - Docker Desktop (for the Postgres container)
-- An OpenAI API key and a Tavily API key
+- An Anthropic API key (default) — or an OpenAI API key with `LLM_PROVIDER=openai`
+- Optionally a Tavily API key for live web search (scholarly sources work without it)
 
 ### 1. Clone and configure
 
@@ -105,7 +106,9 @@ Docker is used only to provide Postgres.
 git clone <your-repo-url>
 cd Research_Forge
 cp backend/.env.example backend/.env
-# Edit backend/.env and fill in OPENAI_API_KEY and TAVILY_API_KEY
+# Edit backend/.env and fill in ANTHROPIC_API_KEY
+# (TAVILY_API_KEY is optional — without it, web research is skipped and
+# scholarly sources carry the run)
 ```
 
 ### 2. Start Postgres
@@ -156,13 +159,17 @@ serve the app from a different origin than the backend (Vercel + Railway)
 set `VITE_API_BASE_URL` at build time — see
 `frontend/VERCEL_DEPLOY.md`.
 
-| Variable               | Required | Default                | Description                                                                                                          |
-| ---------------------- | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`       | Yes      | —                      | Used by every agent that calls GPT-4o (Document, FactCheck, Outline, Synthesis).                                     |
-| `TAVILY_API_KEY`       | Yes      | —                      | Used by the Research agent for live web search.                                                                       |
-| `DATABASE_URL`         | Yes      | —                      | Postgres DSN. Persists sessions and LangGraph checkpoints. Railway injects this when a Postgres addon is provisioned. |
-| `CORS_ORIGINS`         | Yes      | —                      | Comma-separated list of allowed frontend origins. Use the Vercel deployment URL in production.                       |
-| `LANGCHAIN_TRACING_V2` | No       | `false`                | Enables LangSmith tracing of every LLM call and graph node.                                                          |
+| Variable               | Required                | Default                                  | Description                                                                                                          |
+| ---------------------- | ----------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `LLM_PROVIDER`         | No                      | `anthropic`                              | LLM backend: `anthropic` (OpenAI-compatible endpoint) or `openai`.                                                   |
+| `ANTHROPIC_API_KEY`    | Yes (anthropic)         | —                                        | Used by every agent that calls the LLM (Document, FactCheck, Outline, Synthesis) and chat-with-report.               |
+| `OPENAI_API_KEY`       | Yes (openai)            | —                                        | Required only when `LLM_PROVIDER=openai`.                                                                            |
+| `LLM_MODEL`            | No                      | `claude-haiku-4-5-20251001` / `gpt-4o`   | Model name sent to the provider (anthropic / openai defaults).                                                       |
+| `TAVILY_API_KEY`       | No                      | —                                        | Used by the Research agent for live web search. Without it, web research is skipped and scholarly sources carry the run. |
+| `DATABASE_URL`         | Yes                     | —                                        | Postgres DSN. Persists sessions and LangGraph checkpoints. Railway injects this when a Postgres addon is provisioned. |
+| `CORS_ORIGINS`         | Yes                     | —                                        | Comma-separated list of allowed frontend origins. Use the Vercel deployment URL in production.                       |
+| `LLM_PREFLIGHT_TTL_SECONDS` | No                 | `300`                                    | Cache TTL for the run-start provider preflight verification call. `0` disables caching; a negative value disables the preflight. |
+| `LANGCHAIN_TRACING_V2` | No                      | `false`                                  | Enables LangSmith tracing of every LLM call and graph node.                                                          |
 | `LANGCHAIN_API_KEY`    | No       | —                      | Required if `LANGCHAIN_TRACING_V2=true`.                                                                             |
 | `LANGCHAIN_PROJECT`    | No       | `ResearchForge`        | LangSmith project name; traces are bucketed under it.                                                                 |
 | `LANGCHAIN_ENDPOINT`   | No       | LangSmith default      | Override only if using a self-hosted LangSmith instance.                                                              |
@@ -176,8 +183,8 @@ set `VITE_API_BASE_URL` at build time — see
 3. Add the **Postgres** addon. Railway injects `DATABASE_URL`
    automatically into the backend service.
 4. In **Variables**, set:
-   - `OPENAI_API_KEY`
-   - `TAVILY_API_KEY`
+   - `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` plus `LLM_PROVIDER=openai`)
+   - `TAVILY_API_KEY` (optional — scholarly sources carry runs without it)
    - `CORS_ORIGINS` — e.g. `https://your-app.vercel.app`
    - LangSmith vars (optional): `LANGCHAIN_TRACING_V2`,
      `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT`

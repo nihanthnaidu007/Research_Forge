@@ -5,20 +5,16 @@ The verification step itself lives in factcheck_parallel.py: the graph fans
 claims out with Send() and judges them concurrently (factcheck_single_node).
 """
 
-import json
 import logging
 
 from dotenv import load_dotenv
 from langsmith import traceable
 
-from utils.clients import chat_completion_with_usage
-from utils.llm_utils import call_with_retry
+from utils.clients import chat_completion_with_usage, llm_model
+from utils.llm_utils import call_with_retry, extract_json_object
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-MODEL = "gpt-4o"
 
 
 @traceable(name="extract-claims", run_type="llm")
@@ -36,7 +32,7 @@ def extract_claims_from_research(research_results: list[dict]) -> list[str]:
     try:
         response = call_with_retry(
             lambda: chat_completion_with_usage(
-                model=MODEL,
+                model=llm_model(),
                 temperature=0.2,
                 max_completion_tokens=800,
                 response_format={"type": "json_object"},
@@ -64,7 +60,7 @@ Return ONLY a JSON object with a single key "claims" containing an array of clai
         )
 
         content = response.choices[0].message.content.strip()
-        data = json.loads(content)
+        data = extract_json_object(content)
         claims = data.get("claims", [])
         if not isinstance(claims, list):
             claims = []

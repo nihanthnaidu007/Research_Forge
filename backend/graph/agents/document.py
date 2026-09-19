@@ -12,15 +12,12 @@ from dotenv import load_dotenv
 from langsmith import traceable
 
 from graph.state import ReportState, without_parallel_fact_results
-from utils.clients import chat_completion_with_usage
+from utils.clients import chat_completion_with_usage, llm_model
 from utils.llm_utils import call_with_retry
 from utils.validation import validate_url
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-MODEL = "gpt-4o"
 
 
 def extract_pdf_chunks(pdf_path: str) -> list[dict]:
@@ -142,7 +139,7 @@ def summarize_documents(chunks: list[dict], topic: str) -> str:
     try:
         response = call_with_retry(
             lambda: chat_completion_with_usage(
-                model=MODEL,
+                model=llm_model(),
                 temperature=0.3,
                 max_completion_tokens=400,
                 messages=[

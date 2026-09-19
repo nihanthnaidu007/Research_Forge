@@ -2,7 +2,6 @@
 OutlineAgent - Generates structured report outline based on research
 """
 
-import json
 import logging
 from datetime import datetime
 
@@ -11,14 +10,11 @@ from langsmith import traceable
 
 from graph.agents.templates import DEFAULT_TEMPLATE, build_outline_messages
 from graph.state import ReportState, without_parallel_fact_results
-from utils.clients import chat_completion_with_usage
-from utils.llm_utils import call_with_retry
+from utils.clients import chat_completion_with_usage, llm_model
+from utils.llm_utils import call_with_retry, extract_json_object
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-MODEL = "gpt-4o"
 
 
 OUTLINE_SYSTEM_PROMPT = """You are a research report architect. Given a topic and fact-checked research findings, generate a structured report outline.
@@ -80,7 +76,7 @@ def generate_outline(
     try:
         response = call_with_retry(
             lambda: chat_completion_with_usage(
-                model=MODEL,
+                model=llm_model(),
                 temperature=0.4,
                 max_completion_tokens=1000,
                 response_format={"type": "json_object"},
@@ -90,7 +86,7 @@ def generate_outline(
         )
 
         content = response.choices[0].message.content.strip()
-        data = json.loads(content)
+        data = extract_json_object(content)
         raw_outline = data.get("sections", [])
         if not isinstance(raw_outline, list):
             raw_outline = []

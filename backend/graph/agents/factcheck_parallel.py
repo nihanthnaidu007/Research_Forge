@@ -4,20 +4,17 @@ Used by the Send() API to process individual claims in parallel.
 """
 
 import asyncio
-import json
 import logging
 from typing import TypedDict
 
 from dotenv import load_dotenv
 from langsmith import traceable
 
-from utils.clients import chat_completion_with_usage
-from utils.llm_utils import call_with_retry
+from utils.clients import chat_completion_with_usage, llm_model
+from utils.llm_utils import call_with_retry, extract_json_object
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-MODEL = "gpt-4o"
 
 # Maximum number of concurrent OpenAI calls during parallel fact-checking.
 # Set to 5 to stay within OpenAI tier-1 RPM limits across concurrent sessions.
@@ -63,7 +60,7 @@ Respond ONLY with JSON, no markdown, no backticks:
     try:
         response = call_with_retry(
             lambda: chat_completion_with_usage(
-                model=MODEL,
+                model=llm_model(),
                 temperature=0.1,
                 max_completion_tokens=300,
                 response_format={"type": "json_object"},
@@ -79,7 +76,7 @@ Respond ONLY with JSON, no markdown, no backticks:
         )
 
         content = response.choices[0].message.content.strip()
-        result = json.loads(content)
+        result = extract_json_object(content)
 
         return {
             "claim": claim,

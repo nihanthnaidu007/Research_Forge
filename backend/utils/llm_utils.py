@@ -3,6 +3,7 @@ ResearchForge LLM utility helpers.
 Shared retry logic for all OpenAI API calls across agent files.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -18,6 +19,38 @@ T = TypeVar("T")
 # 503: service unavailable — transient, retry
 # 502: bad gateway — transient, retry
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+
+
+def extract_json_object(content: str) -> dict:
+    """
+    Parse a JSON object from an LLM response, tolerating code fences.
+
+    Anthropic's OpenAI-compatible endpoint ignores response_format
+    (documented behavior), so JSON-only prompts are enforced by instruction
+    alone. Claude occasionally wraps the object in ```json fences anyway;
+    this accepts both raw JSON and fenced output. Raises json.JSONDecodeError
+    (or ValueError) when no JSON object can be recovered — callers keep
+    their existing fallback behavior.
+    """
+    text = (content or "").strip()
+    # Strip a single wrapping code fence: ```json ... ``` or ``` ... ```.
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2:
+            body = "\n".join(lines[1:-1]).strip()
+            if body.startswith("{"):
+                text = body
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # Last resort: outermost braces (handles stray leading prose).
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        data = json.loads(text[start : end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("LLM response JSON is not an object")
+    return data
 
 
 def call_with_retry(
